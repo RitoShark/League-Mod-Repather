@@ -9,6 +9,8 @@ from typing import Dict
 import json
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import random
+import string
 
 # Add project root to path for pyRitoFile
 # Handle both development and PyInstaller bundled mode
@@ -48,6 +50,7 @@ class WizardApp:
 		self.s2_status_text = tk.StringVar(value="Waiting to start...")
 		self.main_bin_choice = tk.StringVar(value="Skin0")
 		self.hash_status = tk.StringVar(value="Checking hashes...")
+		self.custom_prefix = tk.StringVar()  # Custom prefix for repathing
 
 		# internal: store full member path inside .fantome
 		self._fantome_member_path = None
@@ -102,6 +105,19 @@ class WizardApp:
 			pass
 		self._copy_menu(e)
 		return e
+	
+	def _generate_random_prefix(self):
+		"""Generate a random prefix by picking one cool word from League hashes."""
+		# Curated list of cool words from hashes.binhashes.txt
+		cool_words = [
+			'fire', 'ice', 'storm', 'shadow', 'light', 'dark', 'void', 'star',
+			'moon', 'blood', 'steel', 'frost', 'flame', 'thunder', 'wind', 'dragon',
+			'blade', 'spirit', 'chaos', 'magic', 'crystal', 'poison', 'mystic',
+			'cosmic', 'royal', 'wild', 'rage', 'fury', 'power', 'death'
+		]
+		
+		# Pick one random word
+		return random.choice(cool_words)
 
 	def _build_layout(self):
 		self.container = self._frame(self.root)
@@ -160,6 +176,18 @@ class WizardApp:
 		e2.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
 		self._button(row2, text="Browse", command=self._pick_fantome).pack(side=tk.LEFT)
 
+		# Prefix Input Section
+		row3 = self._frame(s1)
+		row3.pack(fill=tk.X, padx=12, pady=6)
+		self._label(row3, text="Custom Prefix:").pack(side=tk.LEFT)
+		e3 = self._entry(row3, textvariable=self.custom_prefix, width=80)
+		e3.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+		
+		# Hint label below prefix input
+		prefix_hint = self._label(s1, text="💡 Leave empty for random prefix (e.g., 'shadow', 'dragon', 'void'). Enter custom prefix (e.g., 'mymod', 'custom') for consistent naming.", 
+		                          font=('Arial', 8), foreground='gray')
+		prefix_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+
 		self.steps.append(s1)
 
 		# Step 2: Detection & extraction placeholders
@@ -182,8 +210,21 @@ class WizardApp:
 		row3 = self._frame(s3)
 		row3.pack(fill=tk.X, padx=12, pady=6)
 		self._label(row3, text="Main BIN:").pack(side=tk.LEFT)
-		e3 = self._entry(row3, textvariable=self.main_bin_choice, width=20)
-		e3.pack(side=tk.LEFT, padx=8)
+		
+		# Use Combobox for BIN selection (dropdown + manual entry)
+		if tb:
+			self.bin_combo = tb.Combobox(row3, textvariable=self.main_bin_choice, width=30)
+		else:
+			# Fallback for vanilla tkinter
+			from tkinter import ttk
+			self.bin_combo = ttk.Combobox(row3, textvariable=self.main_bin_choice, width=30)
+		self.bin_combo.pack(side=tk.LEFT, padx=8)
+		
+		# Hint label
+		bin_hint = self._label(s3, text="💡 Select from dropdown or type manually (e.g., Skin0, Skin5, Base)", 
+		                       font=('Arial', 8), foreground='gray')
+		bin_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+		
 		# Open work folder button
 		s3_btn_frame = self._frame(s3)
 		s3_btn_frame.pack(pady=8)
@@ -390,7 +431,6 @@ class WizardApp:
 		
 		# Try to match each WAD against the Champions folder
 		matched_wads = []
-		debug_info = []
 		for wad_member in non_language_wads:
 			# Extract just the filename (e.g., "Kayn.wad.client" from "WAD/Kayn.wad.client")
 			wad_filename = wad_member.split('/')[-1]
@@ -399,23 +439,16 @@ class WizardApp:
 			matching_wad = self._find_fresh_wad(champions_dir, wad_filename)
 			# Check if not None (function returns None when not found)
 			exists = matching_wad is not None
-			debug_info.append(f"{wad_filename}: {'FOUND' if exists else 'NOT FOUND'} (path: {matching_wad if exists else 'N/A'})")
 			
 			if exists:
 				# Found a champion WAD!
 				matched_wads.append((wad_member, wad_filename))
 		
-		# Debug: print what we found
-		print(f"[DEBUG] WADs checked: {', '.join(debug_info)}")
-		print(f"[DEBUG] Matched WADs: {len(matched_wads)}")
-		
 		# If we found champion WADs, return the first one
 		if matched_wads:
-			print(f"[DEBUG] Returning: {matched_wads[0][0]}")
 			return matched_wads[0][0]
 		
 		# If no champion WAD found, return empty (don't use fallback to avoid wrong WAD)
-		print(f"[DEBUG] No champion WAD found, returning empty")
 		return ''
 
 	def _extract_file_from_fantome(self, fantome_path: Path, member: str, dest_path: Path):
@@ -590,8 +623,9 @@ class WizardApp:
 			WizardApp._HashStorage.hashtables = {}
 	
 	class _LocalBum:
-		def __init__(self, project_root: Path):
+		def __init__(self, project_root: Path, custom_prefix: str = 'bum'):
 			self._py = pyRitoFile
+			self.custom_prefix = custom_prefix  # Store custom prefix
 			self.source_dirs = []
 			self.source_files = {}
 			self.source_bins = {}
@@ -688,7 +722,7 @@ class WizardApp:
 				for entry in bin.entries:
 					entry_hash = entry.hash
 					self.scanned_tree[entry_hash] = {}
-					self.entry_prefix[entry_hash] = 'bum'
+					self.entry_prefix[entry_hash] = self.custom_prefix
 					for field in entry.data:
 						scan_field(field, entry_hash)
 					if entry_hash not in self.entry_name:
@@ -834,8 +868,19 @@ class WizardApp:
 		self._set_status("Loading hash tables...")
 		WizardApp._HashStorage.read_all_hashes(hashes_dir)
 		
-		# Local repath engine
-		bum = self._LocalBum(self._project_root())
+		# Get custom prefix or generate random one
+		prefix = self.custom_prefix.get().strip()
+		if not prefix:
+			prefix = self._generate_random_prefix()
+			self._set_status(f"Using randomly generated prefix: {prefix}")
+		else:
+			self._set_status(f"Using custom prefix: {prefix}")
+		
+		# Store prefix for later use (e.g., placeholder creation)
+		self._used_prefix = prefix
+		
+		# Local repath engine with custom prefix
+		bum = self._LocalBum(self._project_root(), custom_prefix=prefix)
 		bum.add_source_dirs([str(fresh_unpack)])
 		# Determine champion and desired skin index
 		champ = getattr(self, '_champion', '').lower()
@@ -856,58 +901,64 @@ class WizardApp:
 		else:
 			m = re.search(r"(skin)?\s*(\d+)", desired)
 			skin_idx = m.group(2) if m else None
-		# Search only within data/characters/<champ>/skins/**
-		base_dir = fresh_unpack / 'data' / 'characters' / champ / 'skins'
-		if not base_dir.exists():
-			self._set_status(f"Skins folder not found: {base_dir}")
+		# Search within ALL character subfolders for the selected skin
+		# e.g., for annie: check annie/skins and annietibbers/skins
+		# e.g., for thresh: check thresh/skins and lantern/skins
+		characters_dir = fresh_unpack / 'data' / 'characters'
+		selected_unifys = []
+		available = []
+		
+		# Find all character subfolders
+		if not characters_dir.exists():
+			self._set_status(f"Characters folder not found: {characters_dir}")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
-		selected_unify = None
-		available = []
-		skin_folder = None
-		for root, _dirs, files in os.walk(base_dir):
-			for f in files:
-				if not f.lower().endswith('.bin'):
-					continue
-				p = Path(root) / f
-				rel = Path(os.path.relpath(p, fresh_unpack)).as_posix()
-				available.append(rel)
-				if skin_idx is not None and skin_folder is None and f"/skins/skin{skin_idx}/" in rel.lower():
-					skin_folder = Path(root)
-				expected = f"{champ}_skins_skin{skin_idx}.bin" if skin_idx is not None else None
-				if expected and f.lower() == expected:
-					selected_unify = bum.unify_path(rel)
-					break
-				if selected_unify is None and desired in rel.lower():
-					selected_unify = bum.unify_path(rel)
-					break
-			if selected_unify:
-				break
-		if not selected_unify and skin_folder is None and skin_idx is not None:
-			cand = base_dir / f"skin{skin_idx}"
-			if cand.exists():
-				skin_folder = cand
-		if not selected_unify and skin_folder is None:
+		
+		# Scan ALL character subfolders for the selected skin
+		for char_folder in characters_dir.iterdir():
+			if not char_folder.is_dir():
+				continue
+			
+			skins_dir = char_folder / 'skins'
+			if not skins_dir.exists():
+				continue
+			
+			# Look for BINs matching the selected skin
+			for root, _dirs, files in os.walk(skins_dir):
+				for f in files:
+					if not f.lower().endswith('.bin'):
+						continue
+					p = Path(root) / f
+					rel = Path(os.path.relpath(p, fresh_unpack)).as_posix()
+					available.append(rel)
+					
+					# Check if this BIN matches the selected skin
+					# Match by filename or path containing the skin identifier
+					if skin_idx is not None:
+						# Check if in correct skin folder (e.g., /skins/skin0/)
+						if f"/skins/skin{skin_idx}/" in rel.lower():
+							selected_unifys.append(bum.unify_path(rel))
+						# Check if filename matches (e.g., skin0.bin)
+						elif f.lower() == f"skin{skin_idx}.bin":
+							selected_unifys.append(bum.unify_path(rel))
+						# Check if expected main BIN (e.g., annie_skins_skin0.bin)
+						expected = f"{char_folder.name.lower()}_skins_skin{skin_idx}.bin"
+						if f.lower() == expected:
+							selected_unifys.append(bum.unify_path(rel))
+					# Also match by name contains (for manual input)
+					if desired in rel.lower() and desired not in ['skin', 'base']:
+						selected_unifys.append(bum.unify_path(rel))
+		
+		if not selected_unifys:
 			preview = ', '.join(available[:8]) + (', ...' if len(available) > 8 else '')
 			self._set_status(f"Main BIN not found for '{desired_raw}'. Found examples: {preview}")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
-		# If exact unify not present, include all bins within skin_folder
-		selected_unifys = []
-		if selected_unify in bum.source_bins:
-			selected_unifys = [selected_unify]
-		else:
-			if skin_folder is not None:
-				for f in os.listdir(skin_folder):
-					if f.lower().endswith('.bin'):
-						rel = Path(os.path.relpath(skin_folder / f, fresh_unpack)).as_posix()
-						selected_unifys.append(bum.unify_path(rel))
-			if not selected_unifys and selected_unify:
-				selected_unifys = [selected_unify]
 		if not selected_unifys:
 			self._set_status("Could not resolve selected BIN(s) to source set.")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
+		
 		for u in selected_unifys:
 			bum.source_bins[u] = True
 			if u not in bum.source_files:
@@ -915,7 +966,9 @@ class WizardApp:
 				if cand.exists():
 					bum.source_files[u] = (str(cand), u)
 		# Repair, scan, and bum
+		# Only repair BINs from the main champion folder (not subfolders like annietibbers, lantern)
 		fixed = 0
+		main_champ_path = f"data/characters/{champ}/"
 		for u in selected_unifys:
 			try:
 				bin_path = bum.source_files.get(u, (None, None))[0]
@@ -923,9 +976,14 @@ class WizardApp:
 					cand = fresh_unpack / Path(u)
 					bin_path = str(cand) if cand.exists() else None
 				if bin_path and str(bin_path).lower().endswith('.bin'):
-					self._set_status(f"Repairing BIN before repath: {os.path.basename(bin_path)}")
-					self._repair_bin_file(Path(bin_path))
-					fixed += 1
+					# Only repair if BIN is in the main champion folder
+					bin_path_normalized = str(bin_path).replace('\\', '/')
+					if main_champ_path in bin_path_normalized:
+						self._set_status(f"Repairing BIN before repath: {os.path.basename(bin_path)}")
+						self._repair_bin_file(Path(bin_path))
+						fixed += 1
+					else:
+						print(f"[DEBUG] Skipping repair for subfolder BIN: {bin_path}")
 			except Exception:
 				pass
 		self._set_status(f"Repaired {fixed} BIN(s); scanning for repath (champ={champ})...")
@@ -1127,6 +1185,10 @@ class WizardApp:
 			# Overlay: copy mod extracted content over fresh extracted content (overwrite)
 			self._set_status("Overlaying mod over fresh (overwrite)...")
 			copied, skipped = self._overlay_copy(mod_unpack, fresh_unpack)
+			
+			# Populate BIN dropdown with available skins from the mod
+			self._populate_bin_dropdown(mod_unpack)
+			
 			self._set_status(f"Overlay complete: copied {copied}, skipped {skipped}. Proceed to Step 3 to choose main BIN and Next to repath.")
 
 			# Mark step 1 as complete and enable Next button
@@ -1232,6 +1294,75 @@ class WizardApp:
 					failed += 1
 		self._set_status(f"TEX→DDS: converted {converted}, failed {failed}")
 
+	def _populate_bin_dropdown(self, mod_unpack: Path):
+		"""Populate the BIN dropdown with available skin BINs from the mod"""
+		try:
+			champ = getattr(self, '_champion', '').lower()
+			print(f"[DEBUG populate_bin_dropdown] Champion: {champ}")
+			if not champ:
+				print("[DEBUG populate_bin_dropdown] No champion found, returning")
+				return
+			
+			# Look for BIN files in the mod's skins folder
+			skins_dir = mod_unpack / 'data' / 'characters' / champ / 'skins'
+			print(f"[DEBUG populate_bin_dropdown] Skins dir: {skins_dir}")
+			print(f"[DEBUG populate_bin_dropdown] Skins dir exists: {skins_dir.exists()}")
+			if not skins_dir.exists():
+				print("[DEBUG populate_bin_dropdown] Skins dir doesn't exist, returning")
+				return
+			
+			# Find all skin folders that contain BIN files (anywhere in their tree)
+			available_bins = set()
+			bin_count = 0
+			for root, _dirs, files in os.walk(skins_dir):
+				for f in files:
+					if f.lower().endswith('.bin'):
+						bin_count += 1
+						print(f"[DEBUG populate_bin_dropdown] Found BIN: {Path(root) / f}")
+						# Extract skin identifier from the BIN filename or path
+						# e.g., .../skins/skin0/... -> "Skin0"
+						# e.g., .../skins/base/... -> "Base"
+						# e.g., .../skins/skin0.bin -> "Skin0" (BIN directly in skins folder)
+						rel_path = Path(root).relative_to(skins_dir)
+						print(f"[DEBUG populate_bin_dropdown] Relative path: {rel_path}")
+						
+						if rel_path.parts:
+							# BIN is in a subfolder (e.g., skins/skin0/file.bin)
+							skin_folder = rel_path.parts[0]
+							skin_name = skin_folder.capitalize()
+							print(f"[DEBUG populate_bin_dropdown] Adding skin from folder: {skin_name}")
+							available_bins.add(skin_name)
+						else:
+							# BIN is directly in skins folder (e.g., skins/skin0.bin)
+							# Extract skin name from filename (remove .bin extension)
+							skin_name = f.lower().replace('.bin', '').capitalize()
+							print(f"[DEBUG populate_bin_dropdown] Adding skin from filename: {skin_name}")
+							available_bins.add(skin_name)
+			
+			print(f"[DEBUG populate_bin_dropdown] Total BINs found: {bin_count}")
+			print(f"[DEBUG populate_bin_dropdown] Available bins: {available_bins}")
+			
+			# Sort and update dropdown
+			if available_bins:
+				sorted_bins = sorted(available_bins, key=lambda x: (x.lower() != 'base', x.lower()))
+				print(f"[DEBUG populate_bin_dropdown] Sorted bins: {sorted_bins}")
+				# Update UI in main thread
+				def update_dropdown():
+					print(f"[DEBUG populate_bin_dropdown] Updating dropdown with: {sorted_bins}")
+					self.bin_combo.configure(values=sorted_bins)
+					# Set default to first item if nothing is selected
+					if not self.main_bin_choice.get():
+						print(f"[DEBUG populate_bin_dropdown] Setting default to: {sorted_bins[0]}")
+						self.main_bin_choice.set(sorted_bins[0])
+				self.root.after(0, update_dropdown)
+			else:
+				print("[DEBUG populate_bin_dropdown] No bins found!")
+		except Exception as e:
+			# Log error for debugging
+			print(f"[DEBUG populate_bin_dropdown] ERROR: {e}")
+			import traceback
+			traceback.print_exc()
+			self._set_status(f"Warning: Could not populate BIN dropdown: {e}")
 
 	def _run_repath_current(self):
 		try:
@@ -1662,8 +1793,9 @@ class WizardApp:
 		self.step_completed[2] = False
 		self.step_completed[3] = False
 		
-		# Clear main BIN choice
-		self.main_bin_choice.set("")
+		# Keep main BIN choice and custom prefix so user doesn't have to re-enter
+		# Don't clear: self.main_bin_choice.set("")
+		# Don't clear: self.custom_prefix
 		
 		# Reset status
 		self.detected_wad_name.set("")
@@ -1743,16 +1875,14 @@ class WizardApp:
 			self._set_status("Warning: Placeholder files not found. Skipping placeholder creation.")
 			return
 		
+		# Missing files are already repathed by bumpath (e.g., "assets/shared/particles/foo.skins_nami_skin58.dds")
+		# They don't have the prefix folder structure because they weren't in the source folder
+		# So we place them directly WITHOUT adding the prefix
+		
 		created_count = 0
 		for missing_file in missing_files:
-			# Remove "assets/bum/" prefix if present
-			clean_path = missing_file
-			if clean_path.startswith('assets/bum/'):
-				clean_path = clean_path[len('assets/bum/'):]
-			elif clean_path.startswith('bum/'):
-				clean_path = clean_path[len('bum/'):]
-			
-			target_file = repathed_dir / clean_path
+			# Use the path as-is (already repathed by bumpath)
+			target_file = repathed_dir / missing_file.lower()
 			target_file.parent.mkdir(parents=True, exist_ok=True)
 			
 			try:
@@ -1762,8 +1892,8 @@ class WizardApp:
 				elif missing_file.lower().endswith('.tex'):
 					shutil.copy2(invis_tex, target_file)
 					created_count += 1
-			except Exception:
-				pass
+			except Exception as e:
+				print(f"[DEBUG] Failed to create placeholder for {missing_file}: {e}")
 		
 		self._set_status(f"Created {created_count} placeholder texture files.")
 	
@@ -1829,6 +1959,11 @@ class WizardApp:
 
 
 def main():
+	print("="*60)
+	print("League Mod Repather - Starting...")
+	print("Console output enabled for debugging")
+	print("="*60)
+	
 	if tb:
 		app = tb.Window(themename="darkly")
 	else:
