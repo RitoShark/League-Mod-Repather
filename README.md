@@ -7,7 +7,7 @@ A standalone tool to repath League of Legends `.fantome` mod files for compatibi
 - ✅ **Automatic Hash Management**: Download/update hash files from CommunityDragon
 - ✅ **WAD Extraction**: Extracts both mod and fresh WAD files
 - ✅ **TEX→DDS Conversion**: Converts fresh textures for compatibility
-- ✅ **BIN Repair**: Applies FrogFixes (StaticMaterial & HealthBar fixes)
+- ✅ **BIN Repair**: Applies Fixes (StaticMaterial & HealthBar fixes)
 - ✅ **Smart Repathing**: Uses LtMAO-hai bumpath algorithm
 - ✅ **Clean Output**: Automatically cleans up temporary files
 
