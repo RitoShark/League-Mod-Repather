@@ -351,17 +351,71 @@ class WizardApp:
 		except Exception:
 			pass
 
-	def _detect_wad_member_in_fantome(self, fantome_path: Path) -> str:
+	def _detect_wad_member_in_fantome(self, fantome_path: Path, champions_dir: Path) -> str:
+		"""
+		Detect the champion WAD file inside the fantome by matching against Champions folder.
+		For multi-WAD fantomes (e.g., kayn.wad.client + common.wad.client + ui.wad.client),
+		we identify which WAD corresponds to an actual champion.
+		"""
 		with zipfile.ZipFile(fantome_path, 'r') as zf:
 			names = zf.namelist()
-		# Prefer exact .wad.client
-		candidates = [n for n in names if n.lower().startswith('wad/') and n.lower().endswith('.wad.client')]
-		if candidates:
-			return candidates[0]
-		# Fallback for typo .wad.clien
-		candidates = [n for n in names if n.lower().startswith('wad/') and n.lower().endswith('.wad.clien')]
-		if candidates:
-			return candidates[0]
+		
+		# Language codes to exclude
+		language_codes = [
+			'.en_us.', '.ja_jp.', '.ko_kr.', '.zh_cn.', '.zh_tw.',
+			'.de_de.', '.es_es.', '.es_mx.', '.fr_fr.', '.it_it.',
+			'.pl_pl.', '.pt_br.', '.ro_ro.', '.ru_ru.', '.tr_tr.'
+		]
+		
+		# Find all .wad.client files in wad/ folder (case-insensitive)
+		# Accepts both "wad/" and "WAD/" and any other casing
+		all_wads = []
+		for name in names:
+			name_parts = name.split('/')
+			if len(name_parts) >= 2:
+				# Check if first part is "wad" (case-insensitive) and ends with .wad.client
+				if name_parts[0].lower() == 'wad' and name.lower().endswith('.wad.client'):
+					all_wads.append(name)
+		
+		# Filter out language-specific WADs
+		non_language_wads = []
+		for wad in all_wads:
+			wad_lower = wad.lower()
+			is_language_wad = any(lang_code in wad_lower for lang_code in language_codes)
+			if not is_language_wad:
+				non_language_wads.append(wad)
+		
+		# Store all WAD members for later (so we can include non-champion WADs in final fantome)
+		self._all_fantome_wads = non_language_wads
+		
+		# Try to match each WAD against the Champions folder
+		matched_wads = []
+		debug_info = []
+		for wad_member in non_language_wads:
+			# Extract just the filename (e.g., "Kayn.wad.client" from "WAD/Kayn.wad.client")
+			wad_filename = wad_member.split('/')[-1]
+			
+			# Check if this WAD exists in the Champions folder (case-insensitive match)
+			matching_wad = self._find_fresh_wad(champions_dir, wad_filename)
+			# Check if not None (function returns None when not found)
+			exists = matching_wad is not None
+			debug_info.append(f"{wad_filename}: {'FOUND' if exists else 'NOT FOUND'} (path: {matching_wad if exists else 'N/A'})")
+			
+			if exists:
+				# Found a champion WAD!
+				matched_wads.append((wad_member, wad_filename))
+		
+		# Debug: print what we found
+		print(f"[DEBUG] WADs checked: {', '.join(debug_info)}")
+		print(f"[DEBUG] Matched WADs: {len(matched_wads)}")
+		
+		# If we found champion WADs, return the first one
+		if matched_wads:
+			print(f"[DEBUG] Returning: {matched_wads[0][0]}")
+			return matched_wads[0][0]
+		
+		# If no champion WAD found, return empty (don't use fallback to avoid wrong WAD)
+		print(f"[DEBUG] No champion WAD found, returning empty")
 		return ''
 
 	def _extract_file_from_fantome(self, fantome_path: Path, member: str, dest_path: Path):
@@ -370,13 +424,48 @@ class WizardApp:
 			with zf.open(member) as src, open(dest_path, 'wb') as dst:
 				shutil.copyfileobj(src, dst, length=1024 * 1024)
 
-	def _find_fresh_wad(self, champions_dir: Path, wad_name: str) -> Path:
+	def _find_fresh_wad(self, champions_dir: Path, wad_name: str) -> Path | None:
+		"""
+		Find the champion WAD file, excluding language-specific WADs.
+		Example: sivir.wad.client ✓, sivir.en_us.wad.client ✗
+		Returns None if not found.
+		"""
 		wad_lower = wad_name.lower()
+		print(f"[DEBUG _find_fresh_wad] Looking for: {wad_name} (lowercase: {wad_lower})")
+		print(f"[DEBUG _find_fresh_wad] Champions dir: {champions_dir}")
+		
+		# Extract champion name from the wad filename (e.g., "sivir" from "sivir.wad.client")
+		# Pattern: championname.wad.client
+		if not wad_lower.endswith('.wad.client'):
+			# If it doesn't end with .wad.client, just do exact match
+			for root, _dirs, files in os.walk(champions_dir):
+				for f in files:
+					if f.lower() == wad_lower:
+						found = Path(root) / f
+						print(f"[DEBUG _find_fresh_wad] FOUND (exact): {found}")
+						return found
+			print(f"[DEBUG _find_fresh_wad] NOT FOUND (exact match)")
+			return None
+		
+		# Get the champion name (everything before .wad.client)
+		champ_name = wad_lower.replace('.wad.client', '')
+		
+		# Look for exact match: championname.wad.client (no language code)
+		target_name = f"{champ_name}.wad.client"
+		print(f"[DEBUG _find_fresh_wad] Target name: {target_name}")
+		
 		for root, _dirs, files in os.walk(champions_dir):
 			for f in files:
-				if f.lower() == wad_lower:
-					return Path(root) / f
-		return Path()
+				f_lower = f.lower()
+				# Must match exactly: championname.wad.client
+				# Reject: championname.en_us.wad.client, championname.ja_jp.wad.client, etc.
+				if f_lower == target_name:
+					found = Path(root) / f
+					print(f"[DEBUG _find_fresh_wad] FOUND: {found}")
+					return found
+		
+		print(f"[DEBUG _find_fresh_wad] NOT FOUND after walking directory")
+		return None
 
 	def _try_extract_wad(self, wad_path: Path, out_dir: Path, hashes_dir: Path) -> bool:
 		out_dir.mkdir(parents=True, exist_ok=True)
@@ -985,10 +1074,10 @@ class WizardApp:
 			fresh_dir.mkdir(parents=True, exist_ok=True)
 
 			self._set_status("Detecting champion .wad.client inside .fantome...")
-			member = self._detect_wad_member_in_fantome(fantome)
+			member = self._detect_wad_member_in_fantome(fantome, champs_dir)
 			if not member:
-				self.detected_wad_name.set("No wad/*.wad.client found in .fantome")
-				self._set_status("Aborted: .fantome does not contain wad client.")
+				self.detected_wad_name.set("No champion wad found in .fantome")
+				self._set_status("Aborted: .fantome does not contain a champion wad client.")
 				return
 			self._fantome_member_path = member
 			wad_name = Path(member).name
@@ -1566,23 +1655,31 @@ class WizardApp:
 		return pyRitoFile.wad.WADHasher.raw_to_hex(path)
 	
 	def _retry_step4(self):
-		"""Retry the repath and package step - go back to step 1"""
-		# Disable retry button during processing
-		self.retry_btn.configure(state=tk.DISABLED)
-		
-		# Reset all step completions except step 0 (file selection)
+		"""Restart the entire process - reset to step 0"""
+		# Reset ALL step completions including step 0
+		self.step_completed[0] = False
 		self.step_completed[1] = False
 		self.step_completed[2] = False
 		self.step_completed[3] = False
 		
-		# Go back to step 1
-		self._show_step(1)
-		self._update_nav()
+		# Clear main BIN choice
+		self.main_bin_choice.set("")
 		
-		# Start fresh extraction
-		self._set_status("Restarting process from extraction...")
-		t = threading.Thread(target=self._detect_and_extract, daemon=True)
-		t.start()
+		# Reset status
+		self.detected_wad_name.set("")
+		self.s2_status_text.set("Ready to start...")
+		
+		# Clear any stored champion name
+		if hasattr(self, '_champion'):
+			delattr(self, '_champion')
+		if hasattr(self, '_repathed_dir'):
+			delattr(self, '_repathed_dir')
+		if hasattr(self, '_fantome_member_path'):
+			delattr(self, '_fantome_member_path')
+		
+		# Go back to step 0 (file selection)
+		self._show_step(0)
+		self._update_nav()
 	
 	def _auto_check_and_fix_missing(self):
 		"""Automatically check for missing files, create placeholders, and package final fantome"""
@@ -1697,7 +1794,10 @@ class WizardApp:
 			with _zip.ZipFile(fantome, 'r') as zin, _zip.ZipFile(final_fantome, 'w', compression=_zip.ZIP_DEFLATED) as zout:
 				for item in zin.infolist():
 					data = zin.read(item.filename)
-					if item.filename.replace('\\', '/') == member.replace('\\', '/'):
+					# Case-insensitive comparison for WAD paths
+					item_path_normalized = item.filename.replace('\\', '/').lower()
+					member_path_normalized = member.replace('\\', '/').lower()
+					if item_path_normalized == member_path_normalized:
 						# replace with final wad
 						with open(final_wad_path, 'rb') as f:
 							data = f.read()
