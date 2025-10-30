@@ -68,10 +68,14 @@ You can update them anytime by clicking "Update" in the tool.
 
 ## Credits
 
-- **pyRitoFile**: Riot file format library
-- **LtMAO-hai**: Bumpath algorithm
-- **FrogFixes**: BIN repair logic
-- **CommunityDragon**: Hash tables
+This tool is built upon the excellent work of:
+
+- **[GuiSai (GuiSaiUwU)](https://github.com/GuiSaiUwU)**: Creator of [pyRitoFile](https://github.com/GuiSaiUwU/pyritofile-package) - Python library for League of Legends file formats (BIN, WAD, SKL, TEX, etc.)
+BIN repair logic for StaticMaterial and HealthBar fixes
+- **[tarngaina](https://github.com/tarngaina)**: Creator of [LtMAO-hai](https://github.com/tarngaina/LtMAO) - Comprehensive League modding toolpack, from which the bumpath algorithm and various utilities were adapted
+- **CommunityDragon**: Hash tables and game data
+
+Special thanks to the League modding community for their continuous contributions and support.
 
 ## License
 
