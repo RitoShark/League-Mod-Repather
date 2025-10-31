@@ -1308,8 +1308,6 @@ class WizardApp:
 		output_dir = self._work_root() / f'repathed_{champ}'
 		# Store the repathed folder path for later use
 		self._repathed_dir = output_dir
-		# Store fresh_unpack path for later use (e.g., copying VO files before packing)
-		self._fresh_unpack_dir = fresh_unpack
 		self._set_status("Repathing (ignore missing, combine linked)...")
 		try:
 			bum.bum(str(output_dir), ignore_missing=True, combine_linked=True)
@@ -2585,14 +2583,6 @@ class WizardApp:
 				self._set_status("Error: Champion name unknown")
 				return
 			wad_name = f"{champ}.wad.client"
-			
-			# Ensure VO files are present before packing (in case they were lost or need to be refreshed)
-			fresh_unpack = getattr(self, '_fresh_unpack_dir', None)
-			if fresh_unpack and fresh_unpack.exists():
-				self._set_status("Ensuring VO files are present before packing...")
-				vo_count = self._copy_vo_files_original(fresh_unpack, repathed_dir)
-				if vo_count > 0:
-					print(f"[DEBUG] Re-copied {vo_count} VO files before packing")
 			
 			# Pack repathed_dir -> new wad
 			final_wad_path = work_root / f"final_{wad_name}"
