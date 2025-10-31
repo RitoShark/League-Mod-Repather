@@ -27,7 +27,7 @@ When Riot Games updates League of Legends, old mods often stop working. This too
 
 2. **Your Mod** (Choose one):
    - **Option A:** Click "Browse" next to ".fantome file" and select your mod
-   - **Option B:** Click "Browse" next to "Mod folder" and select your extracted mod folder
+   - **Option B:** Click "Browse" next to "Mod folder" and select your own mod folder (MOSTLY FOR CREATORS OF MODS) dont use if regular user
 
 3. **Custom Prefix** (Optional):
    - Leave blank for automatic (recommended)
