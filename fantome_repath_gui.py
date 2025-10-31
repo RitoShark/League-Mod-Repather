@@ -549,7 +549,7 @@ class WizardApp:
 
 	def _try_extract_wad(self, wad_path: Path, out_dir: Path, hashes_dir: Path) -> bool:
 		out_dir.mkdir(parents=True, exist_ok=True)
-		# Primary: pyRitoFile.wad with local hashes
+		# Primary: pyRitoFile.wad with local hashes (mirrors LtMAO wad_tool.unpack)
 		try:
 			sys.path.insert(0, str(self._project_root()))
 			import pyRitoFile
@@ -562,31 +562,101 @@ class WizardApp:
 				w.un_hash(hashtables)
 			except Exception:
 				pass
-			# Stream read chunk data and write files
+			
+			hashed_files = {}  # Track files that had to be hashed due to path length
+			
+			# Create directories first (like LtMAO does)
 			from pyRitoFile.stream import BytesStream
+			with BytesStream.reader(str(wad_path)) as bs:
+				for chunk in w.chunks:
+					file_path = str(out_dir / chunk.hash.replace('\\', '/'))
+					dir_path = os.path.dirname(file_path)
+					try:
+						os.makedirs(dir_path, exist_ok=True)
+					except Exception:
+						pass  # Continue anyway, file creation will handle it
+			
+			# Actual extract
 			with BytesStream.reader(str(wad_path)) as bs:
 				for chunk in w.chunks:
 					try:
 						chunk.read_data(bs)
-						# decide filename
-						filename = chunk.hash
-						# ensure extension
-						if '.' not in filename and chunk.extension:
-							filename = f"{filename}.{chunk.extension}"
-						dest = out_dir / filename.replace('\\', '/')
-						dest.parent.mkdir(parents=True, exist_ok=True)
-						if chunk.data is not None:
-							with open(dest, 'wb') as f:
-								f.write(chunk.data)
+						
+						# Output file path of this chunk
+						file_path = str(out_dir / chunk.hash.replace('\\', '/'))
+						
+						# Add extension to hashed file if known
+						if pyRitoFile.wad.WADHasher.is_hash(chunk.hash) and chunk.extension:
+							ext = f'.{chunk.extension}'
+							if not file_path.endswith(ext):
+								file_path += ext
+						
+						# Check if file should be hashed (like LtMAO)
+						should_be_hashed = False
+						# Hash file with long basename (>255 chars Windows limit)
+						if len(os.path.basename(file_path)) > 255:
+							should_be_hashed = True
+						# Hash file if same name as directory
+						if os.path.exists(file_path) and os.path.isdir(file_path):
+							should_be_hashed = True
+						
+						if should_be_hashed:
+							basename = pyRitoFile.wad.WADHasher.raw_to_hex(chunk.hash)
+							if chunk.extension:
+								basename += f'.{chunk.extension}'
+							hashed_file = str(out_dir / basename)
+							hashed_files[basename] = chunk.hash
+							file_path = hashed_file
+						
+						# Write out chunk data to file
+						try:
+							os.makedirs(os.path.dirname(file_path), exist_ok=True)
+							if chunk.data is not None:
+								with open(file_path, 'wb') as f:
+									f.write(chunk.data)
+						except (FileNotFoundError, OSError) as e:
+							# Handle path length issues - try fallback with hashed name
+							if len(file_path) > 200:  # Windows path limit safety
+								basename = pyRitoFile.wad.WADHasher.raw_to_hex(chunk.hash)
+								if chunk.extension:
+									basename += f'.{chunk.extension}'
+								short_file_path = str(out_dir / basename)
+								hashed_files[basename] = chunk.hash
+								try:
+									os.makedirs(os.path.dirname(short_file_path), exist_ok=True)
+									if chunk.data is not None:
+										with open(short_file_path, 'wb') as f:
+											f.write(chunk.data)
+								except Exception:
+									continue  # Skip this file if we can't write it
+							else:
+								continue  # Skip on other errors
+						
 						chunk.free_data()
 					except Exception:
 						# continue on per-chunk errors
 						continue
+			
+			# Remove empty dirs (like LtMAO does)
+			for root, dirs, files in os.walk(out_dir, topdown=False):
+				if len(os.listdir(root)) == 0:
+					try:
+						os.rmdir(root)
+					except Exception:
+						pass
+			
+			# Write hashed_files.json to track mappings (like LtMAO does)
+			if len(hashed_files) > 0:
+				hashed_files_json = out_dir / 'hashed_files.json'
+				with open(hashed_files_json, 'w', encoding='utf-8') as f:
+					json.dump(hashed_files, f, indent=4, ensure_ascii=False)
+			
 			return True
-		except Exception:
-			pass
-
-		return False
+		except Exception as e:
+			print(f"[DEBUG] WAD extraction error: {e}")
+			import traceback
+			traceback.print_exc()
+			return False
 
 	def _load_wad_hashtables(self, hashes_dir: Path) -> Dict[str, Dict[str, str]]:
 		tables: Dict[str, Dict[str, str]] = {
@@ -617,6 +687,121 @@ class WizardApp:
 			pass
 		return tables
 
+	def _extract_hashes_from_folder(self, folder: Path, hashes_dir: Path):
+		"""Extract hashes from BIN files in the mod folder and update user's hash files"""
+		try:
+			# Prepare hash tables
+			wad_hash = pyRitoFile.wad.WADHasher.raw_to_hex
+			start_game_path = ['assets/', 'clientstates/', 'data/', 'levels/', 'maps/', 'uiautoatlas/', 'ux/']
+			
+			hashtables = {
+				'hashes.binentries.txt': {},
+				'hashes.binhashes.txt': {},
+				'hashes.game.txt': {}
+			}
+			
+			def extract_file_value(value, value_type):
+				if value_type == pyRitoFile.bin.BINType.STRING:
+					value_str = str(value).lower()
+					if any(value_str.startswith(prefix) for prefix in start_game_path):
+						hash_key = wad_hash(value_str)
+						hashtables['hashes.game.txt'][hash_key] = value_str
+						# Also add 2x_ and 4x_ variants for DDS files
+						if value_str.endswith('.dds'):
+							parts = value_str.split('/')
+							basename = parts[-1]
+							dirname = '/'.join(parts[:-1])
+							value2x = f'{dirname}/2x_{basename}'
+							value4x = f'{dirname}/4x_{basename}'
+							hashtables['hashes.game.txt'][wad_hash(value2x)] = value2x
+							hashtables['hashes.game.txt'][wad_hash(value4x)] = value4x
+				elif value_type in (pyRitoFile.bin.BINType.LIST, pyRitoFile.bin.BINType.LIST2):
+					if hasattr(value, 'data'):
+						for v in value.data:
+							extract_file_value(v, value_type)
+				elif value_type in (pyRitoFile.bin.BINType.EMBED, pyRitoFile.bin.BINType.POINTER):
+					if hasattr(value, 'data') and value.data is not None:
+						for f in value.data:
+							extract_file_field(f)
+			
+			def extract_file_field(field):
+				if field.type in (pyRitoFile.bin.BINType.LIST, pyRitoFile.bin.BINType.LIST2):
+					for v in field.data:
+						extract_file_value(v, field.value_type)
+				elif field.type in (pyRitoFile.bin.BINType.EMBED, pyRitoFile.bin.BINType.POINTER):
+					if field.data is not None:
+						for f in field.data:
+							extract_file_field(f)
+				elif field.type == pyRitoFile.bin.BINType.MAP:
+					for key, value in field.data.items():
+						extract_file_value(key, field.key_type)
+						extract_file_value(value, field.value_type)
+				elif field.type == pyRitoFile.bin.BINType.OPTION and field.value_type == pyRitoFile.bin.BINType.STRING:
+					if field.data is not None:
+						extract_file_value(field.data, field.value_type)
+				else:
+					extract_file_value(field.data, field.type)
+			
+			# Scan all BIN files in the folder
+			bin_count = 0
+			for root, _dirs, files in os.walk(folder):
+				for file in files:
+					if file.lower().endswith('.bin'):
+						bin_path = Path(root) / file
+						try:
+							bin_obj = pyRitoFile.bin.BIN().read(str(bin_path))
+							# Extract file references from BIN
+							for entry in bin_obj.entries:
+								for field in entry.data:
+									extract_file_field(field)
+							# Extract from links
+							for link in bin_obj.links:
+								extract_file_value(link, pyRitoFile.bin.BINType.STRING)
+							bin_count += 1
+						except Exception:
+							pass  # Skip problematic BINs
+			
+			# Update user's hash files
+			if bin_count > 0:
+				for filename, new_hashes in hashtables.items():
+					if len(new_hashes) == 0:
+						continue
+					
+					hash_file = hashes_dir / filename
+					existing_hashes = {}
+					
+					# Read existing hashes
+					if hash_file.exists():
+						try:
+							with open(hash_file, 'r', encoding='utf-8') as f:
+								sep = 16 if filename in ['hashes.game.txt', 'hashes.lcu.txt'] else 8
+								for line in f:
+									if len(line) > sep:
+										key = line[:sep]
+										val = line[sep+1:-1]
+										existing_hashes[key] = val
+						except Exception:
+							pass
+					
+					# Merge new hashes
+					existing_hashes.update(new_hashes)
+					
+					# Write back sorted
+					try:
+						with open(hash_file, 'w', encoding='utf-8') as f:
+							for key, value in sorted(existing_hashes.items(), key=lambda item: item[1]):
+								f.write(f'{key} {value}\n')
+					except Exception:
+						pass
+				
+				self._set_status(f"✓ Extracted hashes from {bin_count} BIN files")
+			else:
+				self._set_status("No BIN files found for hash extraction")
+		
+		except Exception as e:
+			print(f"[DEBUG] Hash extraction error: {e}")
+			raise
+	
 	def _overlay_copy(self, src_dir: Path, dst_dir: Path) -> tuple[int, int]:
 		"""Copy all files from src_dir into dst_dir, overwriting. Returns (copied, skipped)."""
 		copied = 0
@@ -639,6 +824,37 @@ class WizardApp:
 				except Exception:
 					skipped += 1
 		return (copied, skipped)
+	
+	def _copy_vo_files_original(self, src_dir: Path, dst_dir: Path) -> int:
+		"""Copy VO files from src_dir to dst_dir with original paths (no prefix, no hashing)."""
+		vo_count = 0
+		src = Path(src_dir)
+		dst = Path(dst_dir)
+		if not src.exists():
+			return 0
+		for root, _dirs, files in os.walk(src):
+			root_p = Path(root)
+			rel = root_p.relative_to(src).as_posix()
+			rel_lower = rel.lower()
+			# Only process VO directory
+			if 'assets/sounds/wwise2016/vo/' not in rel_lower:
+				continue
+			for f in files:
+				# Copy all VO-related files (.bnk, .wem, .wpk, and any other files in VO directory)
+				# Common VO file extensions
+				if not f.lower().endswith(('.bnk', '.wem', '.wpk', '.bnk.client', '.wem.client')):
+					# Skip non-VO files (but be permissive - copy most files in VO directory)
+					continue
+				src_file = root_p / f
+				# Keep original path structure
+				dst_file = dst / rel / f
+				try:
+					dst_file.parent.mkdir(parents=True, exist_ok=True)
+					shutil.copy2(src_file, dst_file)
+					vo_count += 1
+				except Exception as e:
+					print(f"[DEBUG] Failed to copy VO file {src_file}: {e}")
+		return vo_count
 
 	# Hash storage (minimal version of LtMAO hash_helper.Storage)
 	class _HashStorage:
@@ -698,6 +914,7 @@ class WizardApp:
 					for f in files:
 						full = str(Path(root)/f)
 						rel = Path(os.path.relpath(full, sd)).as_posix()
+						rel_lower = rel.lower()
 						u = self.unify_path(rel)
 						if u not in self.source_files:
 							self.source_files[u] = (full, rel)
@@ -721,6 +938,9 @@ class WizardApp:
 			def scan_value(value, value_type, entry_hash):
 				if value_type == self._py.bin.BINType.STRING:
 					value_lower = value.lower()
+					# Skip VO files - they should not be repathed or included in scan
+					if 'assets/sounds/wwise2016/vo/' in value_lower:
+						return
 					if 'assets/' in value_lower or 'data/' in value_lower:
 						unify_file = self.unify_path(value)
 						if unify_file in self.source_files:
@@ -799,16 +1019,24 @@ class WizardApp:
 				if value_type == self._py.bin.BINType.STRING:
 					value_lower = value.lower()
 					if 'assets/' in value_lower or 'data/' in value_lower:
+						# NEVER repath VO paths (voice-over files)
+						if 'assets/sounds/wwise2016/vo/' in value_lower:
+							return value
+						
 						unify_file = self.unify_path(value_lower)
-						if unify_file in self.scanned_tree[entry_hash]:
+						# Check if file exists in scanned tree
+						existed = False
+						if entry_hash in self.scanned_tree and unify_file in self.scanned_tree[entry_hash]:
 							existed, path = self.scanned_tree[entry_hash][unify_file]
-							if existed:
-								# bum_path logic inlined
-								if '/' in value:
-									first_slash = value.index('/')
-									return value[:first_slash] + f'/{self.entry_prefix[entry_hash]}' + value[first_slash:]
-								else:
-									return f'{self.entry_prefix[entry_hash]}/' + value
+						
+						# Repath if file exists OR if we're ignoring missing files (repath missing files too)
+						if existed or ignore_missing:
+							# bum_path logic inlined
+							if '/' in value:
+								first_slash = value.index('/')
+								return value[:first_slash] + f'/{self.entry_prefix[entry_hash]}' + value[first_slash:]
+							else:
+								return f'{self.entry_prefix[entry_hash]}/' + value
 				elif value_type in (self._py.bin.BINType.LIST, self._py.bin.BINType.LIST2):
 					value.data = [bum_value(v, value_type, entry_hash) for v in value.data]
 				elif value_type in (self._py.bin.BINType.EMBED, self._py.bin.BINType.POINTER):
@@ -885,7 +1113,7 @@ class WizardApp:
 					if output_file.endswith('.bin'):
 						bum_bin(output_file)
 					bum_files[unify_file] = output_file
-					print(f'bumpath: Finish: Bum {output_file}')
+					# Removed per-file logging to reduce console spam
 			# combine bin
 			if combine_linked:
 				for unify_file in self.source_bins:
@@ -897,10 +1125,35 @@ class WizardApp:
 							if not self.unify_path(link) in linked_unify_files:
 								new_links.append(link)
 						source_bin.links = new_links
+						
+						# Track existing entry hashes to avoid duplicates
+						existing_entry_hashes = set()
+						for entry in source_bin.entries:
+							if hasattr(entry, 'hash'):
+								existing_entry_hashes.add(entry.hash)
+						
 						for linked_unify_file in linked_unify_files:
+							if linked_unify_file not in bum_files:
+								continue
 							bum_file = bum_files[linked_unify_file]
-							source_bin.entries += self._py.bin.BIN().read(bum_file).entries
-							os.remove(bum_file)
+							if not os.path.exists(bum_file):
+								continue
+							try:
+								linked_bin = self._py.bin.BIN().read(bum_file)
+								# Only add entries that don't already exist (by hash)
+								new_entries = []
+								for entry in linked_bin.entries:
+									if hasattr(entry, 'hash') and entry.hash not in existing_entry_hashes:
+										new_entries.append(entry)
+								source_bin.entries += new_entries
+								# Update set of existing hashes for next iteration
+								for entry in new_entries:
+									if hasattr(entry, 'hash'):
+										existing_entry_hashes.add(entry.hash)
+								os.remove(bum_file)
+							except Exception as e:
+								print(f"[DEBUG] Error combining linked BIN {linked_unify_file}: {e}")
+								continue
 						source_bin.write(bum_files[unify_file])
 						print(f'bumpath: Finish: Combine all linked BINs to {bum_files[unify_file]}.')
 			# remove empty dirs
@@ -1033,16 +1286,42 @@ class WizardApp:
 						print(f"[DEBUG] Skipping repair for subfolder BIN: {bin_path}")
 			except Exception:
 				pass
+		self._set_status(f"Repaired {fixed} BIN(s); merging CAC entries...")
+		# Merge CAC entries from fresh folder into main skin bin
+		for u in selected_unifys:
+			try:
+				bin_path = bum.source_files.get(u, (None, None))[0]
+				if not bin_path:
+					cand = fresh_unpack / Path(u)
+					bin_path = str(cand) if cand.exists() else None
+				if bin_path and str(bin_path).lower().endswith('.bin'):
+					bin_path_normalized = str(bin_path).replace('\\', '/')
+					if main_champ_path in bin_path_normalized:
+						self._merge_cac_entries_from_fresh(Path(bin_path), fresh_unpack)
+			except Exception as e:
+				print(f"[DEBUG] Error merging CAC entries: {e}")
+				pass
+		
 		self._set_status(f"Repaired {fixed} BIN(s); scanning for repath (champ={champ})...")
 		bum.scan()
 		# Use champion name in the repathed folder name
 		output_dir = self._work_root() / f'repathed_{champ}'
 		# Store the repathed folder path for later use
 		self._repathed_dir = output_dir
+		# Store fresh_unpack path for later use (e.g., copying VO files before packing)
+		self._fresh_unpack_dir = fresh_unpack
 		self._set_status("Repathing (ignore missing, combine linked)...")
 		try:
 			bum.bum(str(output_dir), ignore_missing=True, combine_linked=True)
-			self._set_status(f"Repath done: {output_dir}")
+			
+			# Copy VO files separately with their original paths (no prefix, no hashing)
+			self._set_status("Copying VO files with original paths...")
+			vo_count = self._copy_vo_files_original(fresh_unpack, output_dir)
+			if vo_count > 0:
+				self._set_status(f"Repath done: {output_dir} ({vo_count} VO files copied)")
+			else:
+				self._set_status(f"Repath done: {output_dir}")
+			
 			WizardApp._HashStorage.free_all_hashes()
 			return True
 		except Exception as e:
@@ -1285,6 +1564,23 @@ class WizardApp:
 				mod_wad_path = mod_dir / wad_name
 				self._extract_file_from_fantome(fantome, member, mod_wad_path)
 
+				# FIRST: Extract hashes from the fantome before unpacking the wad
+				# This improves the quality of wad unpacking by having more hash data available
+				try:
+					self._set_status("Extracting hashes from fantome files...")
+					# First do a quick unpack to get BIN files for hash extraction
+					temp_unpack = mod_dir / 'temp_for_hashes'
+					temp_unpack.mkdir(parents=True, exist_ok=True)
+					temp_ok = self._try_extract_wad(mod_wad_path, temp_unpack, hashes_dir)
+					if temp_ok:
+						self._extract_hashes_from_folder(temp_unpack, hashes_dir)
+						# Clean up temp folder
+						shutil.rmtree(temp_unpack, ignore_errors=True)
+					else:
+						self._set_status("Hash extraction skipped: could not unpack wad for hash extraction")
+				except Exception as e:
+					self._set_status(f"Hash extraction skipped: {e}")
+
 				# find fresh wad in champions, with '.clien' → '.client' fallback
 				self._set_status("Locating fresh .wad.client in Champions folder...")
 				fresh_wad_file = self._find_fresh_wad(champs_dir, wad_name)
@@ -1300,7 +1596,8 @@ class WizardApp:
 				fresh_wad_copy = fresh_dir / wad_name
 				shutil.copy2(fresh_wad_file, fresh_wad_copy)
 
-				self._set_status("Unpacking mod .wad.client (best-effort)...")
+				# NOW unpack with improved hashes
+				self._set_status("Unpacking mod .wad.client with extracted hashes...")
 				mod_unpack = mod_dir / 'unpacked'
 				ok_mod = self._try_extract_wad(mod_wad_path, mod_unpack, hashes_dir)
 
@@ -1314,6 +1611,15 @@ class WizardApp:
 				self._convert_all_tex_to_dds(fresh_unpack)
 			except Exception as e:
 				self._set_status(f"TEX→DDS conversion skipped: {e}")
+
+			# Hash extraction already done earlier for fantome mode
+			# For mod folder mode, extract hashes now since we have the unpacked files
+			if mod_folder_path:
+				try:
+					self._set_status("Extracting hashes from mod files...")
+					self._extract_hashes_from_folder(mod_unpack, hashes_dir)
+				except Exception as e:
+					self._set_status(f"Hash extraction skipped: {e}")
 
 			# Overlay: copy mod extracted content over fresh extracted content (overwrite)
 			self._set_status("Overlaying mod over fresh (overwrite)...")
@@ -1613,6 +1919,90 @@ class WizardApp:
 		# write back
 		b.write(str(bin_path))
 		WizardApp._HashStorage.free_all_hashes()
+	
+	def _merge_cac_entries_from_fresh(self, main_bin_path: Path, fresh_unpack: Path):
+		"""Merge ALL CAC (ContextualActionData) entries from fresh folder BINs into main skin bin"""
+		try:
+			# Load hashes
+			hashes_dir = self._hash_dir()
+			WizardApp._HashStorage.read_all_hashes(hashes_dir)
+			
+			BIN = pyRitoFile.bin.BIN
+			H = {}
+			for fname in ['hashes.binentries.txt', 'hashes.binhashes.txt', 'hashes.bintypes.txt', 'hashes.binfields.txt']:
+				if fname in WizardApp._HashStorage.hashtables:
+					for hex_hash, raw_name in WizardApp._HashStorage.hashtables[fname].items():
+						H[raw_name] = hex_hash
+						if raw_name and raw_name[0].islower():
+							H[raw_name[0].upper() + raw_name[1:]] = hex_hash
+			
+			# Read main bin
+			main_bin = BIN().read(str(main_bin_path))
+			
+			# Get existing CAC entry hashes from main bin
+			existing_cac_hashes = set()
+			for entry in main_bin.entries:
+				if entry.type == H.get('ContextualActionData') or entry.type == H.get('contextualactiondata'):
+					existing_cac_hashes.add(entry.hash)
+			
+			# Collect all CAC entries from fresh folder
+			found_cac_entries = []  # List of (entry, links to add)
+			found_cac_links = set()
+			
+			def scan_fresh_bin(bin_path: Path):
+				try:
+					bin_obj = BIN().read(str(bin_path))
+					
+					# Collect all CAC entries and their links
+					for entry in bin_obj.entries:
+						if entry.type == H.get('ContextualActionData') or entry.type == H.get('contextualactiondata'):
+							# Only add if not already in main bin
+							if entry.hash not in existing_cac_hashes:
+								found_cac_entries.append(entry)
+								existing_cac_hashes.add(entry.hash)  # Prevent duplicates
+								# Also collect CAC links from this bin
+								for link in bin_obj.links:
+									if link and '/CAC/' in link:
+										found_cac_links.add(link)
+				except Exception:
+					pass  # Skip problematic BINs
+			
+			# Scan root of fresh folder
+			fresh_root_bins = list(fresh_unpack.glob('*.bin'))
+			for bin_file in fresh_root_bins:
+				scan_fresh_bin(bin_file)
+			
+			# Scan data folder (but not data/characters)
+			data_folder = fresh_unpack / 'data'
+			if data_folder.exists():
+				for bin_file in data_folder.rglob('*.bin'):
+					bin_path_str = str(bin_file).replace('\\', '/').lower()
+					# Skip data/characters subfolder
+					if '/data/characters/' in bin_path_str:
+						continue
+					scan_fresh_bin(bin_file)
+			
+			# Merge all found CAC entries into main bin
+			if found_cac_entries:
+				# Add all CAC entries
+				main_bin.entries.extend(found_cac_entries)
+				
+				# Add all CAC links that aren't already present
+				for link in found_cac_links:
+					if link not in main_bin.links:
+						main_bin.links.append(link)
+				
+				# Write main bin with merged CAC entries
+				main_bin.write(str(main_bin_path))
+				self._set_status(f"Merged {len(found_cac_entries)} CAC entries into main skin bin")
+			
+			WizardApp._HashStorage.free_all_hashes()
+		except Exception as e:
+			print(f"[DEBUG] Error in _merge_cac_entries_from_fresh: {e}")
+			import traceback
+			traceback.print_exc()
+			if 'hashes_dir' in locals():
+				WizardApp._HashStorage.free_all_hashes()
 
 	def _pack_wad(self, raw_dir: Path, wad_file: Path) -> None:
 		# Local pack using pyRitoFile.wad (mirrors LtMAO.wad_tool.pack)
@@ -1627,12 +2017,17 @@ class WizardApp:
 				if file == 'hashed_files.json':
 					continue
 				fpath = str(Path(root) / file)
+				relative_path = Path(fpath).relative_to(raw_dir).as_posix()
 				chunk_datas.append(fpath)
 				basename = Path(file).name
-				relative_path = Path(fpath).relative_to(raw_dir).as_posix()
-				# if basename looks hashed and located at root, keep as hash
 				name_wo_ext = basename.split('.')[0]
-				if pyRitoFile.wad.WADHasher.is_hash(name_wo_ext) and relative_path == basename:
+				relative_path_lower = relative_path.lower()
+				
+				# VO files should keep their original paths - never hash them
+				if 'assets/sounds/wwise2016/vo/' in relative_path_lower:
+					chunk_hashes.append(relative_path)
+				# if basename looks hashed and located at root, keep as hash
+				elif pyRitoFile.wad.WADHasher.is_hash(name_wo_ext) and relative_path == basename:
 					chunk_hashes.append(name_wo_ext)
 				else:
 					chunk_hashes.append(relative_path)
@@ -1763,9 +2158,20 @@ class WizardApp:
 				result = self._pyntex_check_dir(repathed_dir)
 				
 				# Create report
-				total_mentioned = sum(len(entry.get('mentioned_files', [])) for bin_results in result.values() if isinstance(bin_results, list) for entry in bin_results)
-				total_missing = sum(len(entry.get('missing_files', [])) for bin_results in result.values() if isinstance(bin_results, list) for entry in bin_results)
+				# Note: result contains file paths as keys mapping to lists of entry dicts, plus 'junk_files' key
 				junk_files = result.get('junk_files', [])
+				total_mentioned = 0
+				total_missing = 0
+				for key, bin_results in result.items():
+					# Skip the 'junk_files' key - it's a list of strings, not entry dicts
+					if key == 'junk_files':
+						continue
+					if isinstance(bin_results, list):
+						for entry in bin_results:
+							# Ensure entry is a dict before calling .get()
+							if isinstance(entry, dict):
+								total_mentioned += len(entry.get('mentioned_files', []))
+								total_missing += len(entry.get('missing_files', []))
 				
 				# Save detailed JSON report
 				json_file = self._work_root() / 'missing_files_report.json'
@@ -1808,13 +2214,16 @@ class WizardApp:
 		hashes_dir = self._hash_dir()
 		WizardApp._HashStorage.read_all_hashes(hashes_dir)
 		
+		# Get prefix for repathing matching (if available)
+		prefix = getattr(self, '_used_prefix', None)
+		
 		# Parse BIN files
 		for full_file_index, full_file in enumerate(full_files):
 			if full_file.endswith('.bin'):
 				try:
 					bin_obj = pyRitoFile.bin.BIN().read(full_file)
 					bin_obj.un_hash(WizardApp._HashStorage.hashtables)
-					result = self._pyntex_parse_bin(bin_obj, existing_files=existing_files)
+					result = self._pyntex_parse_bin(bin_obj, existing_files=existing_files, prefix=prefix)
 					if len(result) > 0:
 						res[short_files[full_file_index]] = result
 					existing_files[short_files[full_file_index]] = False
@@ -1829,7 +2238,57 @@ class WizardApp:
 		
 		return res
 	
-	def _pyntex_parse_bin(self, bin_obj, *, existing_files={}):
+	def _pyntex_paths_match(self, mentioned_path: str, existing_path: str, prefix: str = None) -> bool:
+		"""Check if two paths match, accounting for repathing prefixes"""
+		# First try standard unified path comparison (hash-based)
+		if self._pyntex_unify_path(mentioned_path) == self._pyntex_unify_path(existing_path):
+			return True
+		
+		# If prefix is provided, try matching with prefix adjustments
+		if prefix:
+			prefix_lower = prefix.lower()
+			mentioned_lower = mentioned_path.lower()
+			existing_lower = existing_path.lower()
+			
+			# Helper function to try prefix patterns for a given base path (e.g., "assets/" or "data/")
+			def try_prefix_patterns(base: str):
+				base_lower = base.lower()
+				# Try removing prefix from existing path to match mentioned
+				# Pattern 1: "{base}{prefix}/..." -> "{base}..."
+				if f'{base_lower}{prefix_lower}/' in existing_lower:
+					existing_without_prefix = existing_lower.replace(f'{base_lower}{prefix_lower}/', f'{base_lower}', 1)
+					if mentioned_lower == existing_without_prefix:
+						return True
+				
+				# Pattern 2: "{prefix}/{base}..." -> "{base}..."
+				if existing_lower.startswith(f'{prefix_lower}/{base_lower}'):
+					existing_without_prefix = existing_lower[len(f'{prefix_lower}/'):]
+					if mentioned_lower == existing_without_prefix:
+						return True
+				
+				# Try adding prefix to mentioned path to match existing
+				# Pattern 1: "{base}..." -> "{base}{prefix}/..."
+				if mentioned_lower.startswith(base_lower):
+					mentioned_with_prefix = mentioned_lower.replace(f'{base_lower}', f'{base_lower}{prefix_lower}/', 1)
+					if existing_lower == mentioned_with_prefix:
+						return True
+				
+				# Pattern 2: "{base}..." -> "{prefix}/{base}..."
+				if mentioned_lower.startswith(base_lower):
+					mentioned_with_prefix = f'{prefix_lower}/{base_lower}' + mentioned_lower[len(base_lower):]
+					if existing_lower == mentioned_with_prefix:
+						return True
+				return False
+			
+			# Try patterns for both "assets/" and "data/" paths
+			if try_prefix_patterns('assets/'):
+				return True
+			if try_prefix_patterns('data/'):
+				return True
+		
+		return False
+	
+	def _pyntex_parse_bin(self, bin_obj, *, existing_files={}, prefix: str = None):
 		"""Parse BIN entries to find mentioned and missing files"""
 		def parse_entry(entry):
 			mentioned_files = []
@@ -1872,10 +2331,9 @@ class WizardApp:
 			
 			if len(existing_files) > 0:
 				for file in mentioned_files:
-					path_unified = self._pyntex_unify_path(file)
 					found = False
 					for existing_file in existing_files:
-						if path_unified == self._pyntex_unify_path(existing_file):
+						if self._pyntex_paths_match(file, existing_file, prefix):
 							existing_files[existing_file] = False
 							found = True
 							# Handle 2x_ and 4x_ DDS variants
@@ -1883,10 +2341,11 @@ class WizardApp:
 								splits = file.split('/')
 								dds2x = '/'.join(splits[:-1] + ['2x_' + splits[-1]])
 								dds4x = '/'.join(splits[:-1] + ['4x_' + splits[-1]])
-								if dds2x in existing_files:
-									existing_files[dds2x] = False
-								if dds4x in existing_files:
-									existing_files[dds4x] = False
+								# Check if variants exist in existing_files
+								for existing_variant in list(existing_files.keys()):
+									if self._pyntex_paths_match(dds2x, existing_variant, prefix) or \
+									   self._pyntex_paths_match(dds4x, existing_variant, prefix):
+										existing_files[existing_variant] = False
 							break
 					if not found:
 						missing_files.append(file)
@@ -1962,27 +2421,41 @@ class WizardApp:
 			
 			# Collect all missing files (only .dds and .tex)
 			missing_textures = []
-			for bin_results in result.values():
+			print(f"[DEBUG] Processing pyntex results, total keys: {len(result)}")
+			for key, bin_results in result.items():
+				# Skip the 'junk_files' key - it's a list of strings, not entry dicts
+				if key == 'junk_files':
+					continue
 				if isinstance(bin_results, list):
 					for entry in bin_results:
-						for missing_file in entry.get('missing_files', []):
-							# Only process .dds and .tex files
-							if missing_file.lower().endswith(('.dds', '.tex')):
-								if missing_file not in missing_textures:
-									missing_textures.append(missing_file)
+						# Ensure entry is a dict before calling .get()
+						if isinstance(entry, dict):
+							missing_in_entry = entry.get('missing_files', [])
+							print(f"[DEBUG] Entry has {len(missing_in_entry)} missing files")
+							for missing_file in missing_in_entry:
+								# Only process .dds and .tex files
+								if missing_file.lower().endswith(('.dds', '.tex')):
+									if missing_file not in missing_textures:
+										missing_textures.append(missing_file)
+										print(f"[DEBUG] Added missing texture: {missing_file}")
+			
+			print(f"[DEBUG] Total missing textures collected: {len(missing_textures)}")
 			
 			# Save detailed report
 			json_file = self._work_root() / 'missing_files_report.json'
 			with open(json_file, 'w', encoding='utf-8') as f:
 				json.dump(result, f, indent=4, ensure_ascii=False)
+			print(f"[DEBUG] Saved report to: {json_file}")
 			
 			# Create placeholders for missing textures
 			if len(missing_textures) > 0:
 				self._set_status(f"Found {len(missing_textures)} missing textures. Creating placeholders...")
+				print(f"[DEBUG] Calling _create_placeholder_textures with {len(missing_textures)} files")
 				self._create_placeholder_textures(repathed_dir, missing_textures)
 				self._set_status(f"Created {len(missing_textures)} placeholder textures.")
 			else:
 				self._set_status("✓ No missing texture files found!")
+				print("[DEBUG] No missing textures found!")
 			
 			# Automatically package final fantome
 			self._set_status("Packaging final .fantome with all fixes...")
@@ -1993,42 +2466,80 @@ class WizardApp:
 	
 	def _create_placeholder_textures(self, repathed_dir: Path, missing_files: list):
 		"""Create placeholder invis.dds/invis.tex for missing texture files"""
+		print(f"[DEBUG] _create_placeholder_textures called with {len(missing_files)} files")
+		print(f"[DEBUG] repathed_dir: {repathed_dir}")
+		print(f"[DEBUG] missing_files: {missing_files[:5]}...")  # Show first 5
+		
 		# Get bundled placeholder files
 		if getattr(sys, 'frozen', False):
-			# Running as EXE - placeholders are in _MEIPASS
+			# Running as EXE - placeholders are in _MEIPASS root (bundled by build.spec)
 			placeholder_dir = Path(sys._MEIPASS)
 		else:
-			# Running as script - placeholders are in project root
-			placeholder_dir = self._project_root().parent / "League Mod Repather"
+			# Running as script - placeholders are in the same directory as this script
+			placeholder_dir = Path(__file__).parent
 		
+		print(f"[DEBUG] placeholder_dir: {placeholder_dir}")
 		invis_dds = placeholder_dir / 'invis.dds'
 		invis_tex = placeholder_dir / 'invis.tex'
+		print(f"[DEBUG] invis_dds exists: {invis_dds.exists()}, path: {invis_dds}")
+		print(f"[DEBUG] invis_tex exists: {invis_tex.exists()}, path: {invis_tex}")
 		
 		if not invis_dds.exists() or not invis_tex.exists():
 			self._set_status("Warning: Placeholder files not found. Skipping placeholder creation.")
+			print(f"[ERROR] Placeholder files not found! invis_dds: {invis_dds.exists()}, invis_tex: {invis_tex.exists()}")
 			return
 		
-		# Missing files are already repathed by bumpath (e.g., "assets/shared/particles/foo.skins_nami_skin58.dds")
-		# They don't have the prefix folder structure because they weren't in the source folder
-		# So we place them directly WITHOUT adding the prefix
-		
 		created_count = 0
-		for missing_file in missing_files:
-			# Use the path as-is (already repathed by bumpath)
-			target_file = repathed_dir / missing_file.lower()
-			target_file.parent.mkdir(parents=True, exist_ok=True)
-			
-			try:
-				if missing_file.lower().endswith('.dds'):
-					shutil.copy2(invis_dds, target_file)
-					created_count += 1
-				elif missing_file.lower().endswith('.tex'):
-					shutil.copy2(invis_tex, target_file)
-					created_count += 1
-			except Exception as e:
-				print(f"[DEBUG] Failed to create placeholder for {missing_file}: {e}")
+		skipped_count = 0
+		error_count = 0
 		
-		self._set_status(f"Created {created_count} placeholder texture files.")
+		for missing_file in missing_files:
+			# Missing files are paths as they appear in the BINs (already repathed if applicable)
+			# Use them as-is - they're in the exact format the game expects
+			target_path = missing_file.lower()
+			target_file = repathed_dir / target_path
+			
+			# Skip if file already exists
+			if target_file.exists():
+				skipped_count += 1
+				print(f"[SKIP] File already exists: {target_file}")
+				continue
+			
+			# Create parent directories if they don't exist
+			try:
+				target_file.parent.mkdir(parents=True, exist_ok=True)
+			except Exception as e:
+				print(f"[ERROR] Failed to create directory {target_file.parent}: {e}")
+				error_count += 1
+				continue
+			
+			# Determine which placeholder to use
+			source_placeholder = None
+			if missing_file.lower().endswith('.dds'):
+				source_placeholder = invis_dds
+			elif missing_file.lower().endswith('.tex'):
+				source_placeholder = invis_tex
+			else:
+				# Skip non-texture files
+				continue
+			
+			# Copy the placeholder file
+			try:
+				shutil.copy2(source_placeholder, target_file)
+				created_count += 1
+				print(f"[OK] Created placeholder: {target_file}")
+			except Exception as e:
+				error_count += 1
+				print(f"[ERROR] Failed to create placeholder for {missing_file} -> {target_file}: {e}")
+				import traceback
+				traceback.print_exc()
+		
+		status_msg = f"Created {created_count} placeholder texture files"
+		if skipped_count > 0:
+			status_msg += f", skipped {skipped_count} (already exist)"
+		if error_count > 0:
+			status_msg += f", {error_count} errors"
+		self._set_status(status_msg)
 	
 	def _create_info_json(self, champ: str, is_new: bool) -> str:
 		"""Create a basic info.json for the fantome"""
@@ -2074,6 +2585,14 @@ class WizardApp:
 				self._set_status("Error: Champion name unknown")
 				return
 			wad_name = f"{champ}.wad.client"
+			
+			# Ensure VO files are present before packing (in case they were lost or need to be refreshed)
+			fresh_unpack = getattr(self, '_fresh_unpack_dir', None)
+			if fresh_unpack and fresh_unpack.exists():
+				self._set_status("Ensuring VO files are present before packing...")
+				vo_count = self._copy_vo_files_original(fresh_unpack, repathed_dir)
+				if vo_count > 0:
+					print(f"[DEBUG] Re-copied {vo_count} VO files before packing")
 			
 			# Pack repathed_dir -> new wad
 			final_wad_path = work_root / f"final_{wad_name}"
