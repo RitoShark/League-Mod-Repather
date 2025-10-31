@@ -175,6 +175,23 @@ class WizardApp:
 		e2 = self._entry(row2, textvariable=self.fantome_path, width=80)
 		e2.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
 		self._button(row2, text="Browse", command=self._pick_fantome).pack(side=tk.LEFT)
+		
+		# OR separator
+		or_label = self._label(s1, text="— OR —", font=('Arial', 9, 'bold'), foreground='gray')
+		or_label.pack(pady=6)
+		
+		row2b = self._frame(s1)
+		row2b.pack(fill=tk.X, padx=12, pady=6)
+		self._label(row2b, text="Mod folder:").pack(side=tk.LEFT)
+		self.mod_folder_path = tk.StringVar()
+		e2b = self._entry(row2b, textvariable=self.mod_folder_path, width=80)
+		e2b.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+		self._button(row2b, text="Browse", command=self._pick_mod_folder).pack(side=tk.LEFT)
+		
+		# Hint label
+		mod_hint = self._label(s1, text="💡 Select a .fantome file OR a pre-extracted mod folder (champion will be auto-detected)", 
+		                       font=('Arial', 8), foreground='gray')
+		mod_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 
 		# Prefix Input Section
 		row3 = self._frame(s1)
@@ -314,10 +331,21 @@ class WizardApp:
 		path = filedialog.askopenfilename(title="Select .fantome file", filetypes=[("Fantome", "*.fantome"), ("Zip", "*.zip"), ("All", "*.*")])
 		if path:
 			self.fantome_path.set(path)
+			# Clear mod folder if fantome is selected
+			self.mod_folder_path.set("")
+	
+	def _pick_mod_folder(self):
+		path = filedialog.askdirectory(title="Select pre-extracted mod folder")
+		if path:
+			self.mod_folder_path.set(path)
+			# Clear fantome if mod folder is selected
+			self.fantome_path.set("")
 
 	def _validate_inputs(self) -> bool:
 		champs = self.champions_dir.get().strip()
 		fantome = self.fantome_path.get().strip()
+		mod_folder = self.mod_folder_path.get().strip()
+		
 		if not champs or not os.path.isdir(champs):
 			messagebox.showerror(APP_TITLE, "Please select a valid Champions folder.")
 			return False
@@ -326,12 +354,31 @@ class WizardApp:
 			self._save_config()
 		except Exception:
 			pass
-		if not fantome or not os.path.isfile(fantome):
-			messagebox.showerror(APP_TITLE, "Please select a valid .fantome file.")
+		
+		# Check if either fantome OR mod folder is provided (not both)
+		if fantome and mod_folder:
+			messagebox.showerror(APP_TITLE, "Please select EITHER a .fantome file OR a mod folder, not both.")
 			return False
-		if not (fantome.lower().endswith(".fantome") or fantome.lower().endswith(".zip")):
-			messagebox.showerror(APP_TITLE, "Selected file is not a .fantome/.zip archive.")
+		
+		if fantome:
+			# Validate fantome file
+			if not os.path.isfile(fantome):
+				messagebox.showerror(APP_TITLE, "Please select a valid .fantome file.")
+				return False
+			if not (fantome.lower().endswith(".fantome") or fantome.lower().endswith(".zip")):
+				messagebox.showerror(APP_TITLE, "File must be a .fantome or .zip archive.")
+				return False
+		elif mod_folder:
+			# Validate mod folder
+			if not os.path.isdir(mod_folder):
+				messagebox.showerror(APP_TITLE, "Please select a valid mod folder.")
+				return False
+			# Champion name will be auto-detected from folder structure
+		else:
+			# Neither provided
+			messagebox.showerror(APP_TITLE, "Please select either a .fantome file or a mod folder.")
 			return False
+		
 		return True
 
 	# ---------- Step 2: Detection & Extraction ----------
@@ -1064,6 +1111,48 @@ class WizardApp:
 			self._set_status(f"Package failed: {e}")
 			return False
 
+	def _detect_champion_from_folder(self, mod_folder: Path, champs_dir: Path) -> str:
+		"""
+		Auto-detect champion name from mod folder structure by looking for data/characters/{champ}/.
+		Only considers champions that exist in the Champions folder (ignoring subfolders like annietibbers).
+		"""
+		try:
+			# Look for data/characters/{champ}/ structure
+			characters_path = mod_folder / 'data' / 'characters'
+			if not characters_path.exists():
+				# Try case-insensitive search
+				for item in mod_folder.iterdir():
+					if item.is_dir() and item.name.lower() == 'data':
+						for subitem in item.iterdir():
+							if subitem.is_dir() and subitem.name.lower() == 'characters':
+								characters_path = subitem
+								break
+						break
+			
+			if not characters_path or not characters_path.exists():
+				return ""
+			
+			# Get all champion folders
+			champ_folders = [d.name.lower() for d in characters_path.iterdir() if d.is_dir()]
+			
+			# Filter to only champions that exist in the Champions folder
+			# (this excludes subfolders like annietibbers, lantern, etc.)
+			valid_champs = []
+			for champ_folder in champ_folders:
+				wad_name = f"{champ_folder}.wad.client"
+				matching_wad = self._find_fresh_wad(champs_dir, wad_name)
+				if matching_wad and matching_wad.exists():
+					valid_champs.append(champ_folder)
+			
+			# Return the first valid champion found
+			if valid_champs:
+				return valid_champs[0]
+			
+			return ""
+		except Exception as e:
+			print(f"[DEBUG] Error detecting champion from folder: {e}")
+			return ""
+	
 	def _safe_cleanup_work_folder(self, work_root: Path):
 		"""Safely clean up specific leftover files/folders from previous runs"""
 		try:
@@ -1119,7 +1208,8 @@ class WizardApp:
 	def _detect_and_extract(self):
 		try:
 			champs_dir = Path(self.champions_dir.get().strip())
-			fantome = Path(self.fantome_path.get().strip())
+			fantome_path = self.fantome_path.get().strip()
+			mod_folder_path = self.mod_folder_path.get().strip()
 			work_root = self._work_root()
 			
 			# Safe cleanup of previous run leftovers
@@ -1130,50 +1220,93 @@ class WizardApp:
 			fresh_dir = work_root / 'fresh_extract'
 			mod_dir.mkdir(parents=True, exist_ok=True)
 			fresh_dir.mkdir(parents=True, exist_ok=True)
-
-			self._set_status("Detecting champion .wad.client inside .fantome...")
-			member = self._detect_wad_member_in_fantome(fantome, champs_dir)
-			if not member:
-				self.detected_wad_name.set("No champion wad found in .fantome")
-				self._set_status("Aborted: .fantome does not contain a champion wad client.")
-				return
-			self._fantome_member_path = member
-			wad_name = Path(member).name
-			# store champion from wad basename (e.g., Sivir.wad.client -> sivir)
-			self._champion = wad_name.split('.')[0].lower()
-			self.detected_wad_name.set(f"Detected: {wad_name}")
-
-			# extract mod wad file (using exact member path)
-			self._set_status("Extracting mod .wad.client from .fantome...")
-			mod_wad_path = mod_dir / wad_name
-			self._extract_file_from_fantome(fantome, member, mod_wad_path)
-
-			# find fresh wad in champions, with '.clien' → '.client' fallback
-			self._set_status("Locating fresh .wad.client in Champions folder...")
-			fresh_wad_file = self._find_fresh_wad(champs_dir, wad_name)
-			if not fresh_wad_file.exists() and wad_name.lower().endswith('.wad.clien'):
-				fixed = wad_name + 't'
-				fresh_wad_file = self._find_fresh_wad(champs_dir, fixed)
-				if fresh_wad_file.exists():
-					wad_name = fixed
-			if not fresh_wad_file.exists():
-				self._set_status(f"Aborted: could not find {wad_name} under Champions folder.")
-				return
-			# copy fresh wad to work dir for transparency
-			fresh_wad_copy = fresh_dir / wad_name
-			shutil.copy2(fresh_wad_file, fresh_wad_copy)
-
-			# attempt extraction using available tools
-			# Use AppData hash directory, not bundled
+			
+			# Use AppData hash directory
 			hashes_dir = self._hash_dir()
+			
+			# Determine if using fantome or mod folder
+			if mod_folder_path:
+				# MOD FOLDER MODE: Copy folder directly, skip fantome extraction
+				self._set_status("Using pre-extracted mod folder...")
+				mod_folder = Path(mod_folder_path)
+				
+				# Auto-detect champion name from folder structure
+				self._set_status("Auto-detecting champion from folder structure...")
+				champ_name = self._detect_champion_from_folder(mod_folder, champs_dir)
+				if not champ_name:
+					self._set_status("Aborted: Could not auto-detect champion from mod folder.")
+					messagebox.showerror(APP_TITLE, "Could not detect champion from mod folder structure.\nPlease ensure the folder contains data/characters/{champion}/ structure.")
+					return
+				
+				self._champion = champ_name
+				wad_name = f"{champ_name}.wad.client"
+				self.detected_wad_name.set(f"Auto-detected: {champ_name}")
+				
+				# Copy mod folder to mod_extract/unpacked
+				self._set_status("Copying mod folder to work directory...")
+				mod_unpack = mod_dir / 'unpacked'
+				shutil.copytree(mod_folder, mod_unpack, dirs_exist_ok=True)
+				ok_mod = True  # Mod folder copy succeeded
+				
+				# Find fresh wad in champions folder
+				self._set_status("Locating fresh .wad.client in Champions folder...")
+				fresh_wad_file = self._find_fresh_wad(champs_dir, wad_name)
+				if not fresh_wad_file or not fresh_wad_file.exists():
+					self._set_status(f"Aborted: could not find {wad_name} under Champions folder.")
+					return
+				
+				# Copy fresh wad to work dir
+				fresh_wad_copy = fresh_dir / wad_name
+				shutil.copy2(fresh_wad_file, fresh_wad_copy)
+				
+				# Extract fresh wad
+				self._set_status("Unpacking fresh .wad.client (best-effort)...")
+				fresh_unpack = fresh_dir / 'unpacked'
+				ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
+				
+			else:
+				# FANTOME MODE: Original extraction logic
+				fantome = Path(fantome_path)
+				
+				self._set_status("Detecting champion .wad.client inside .fantome...")
+				member = self._detect_wad_member_in_fantome(fantome, champs_dir)
+				if not member:
+					self.detected_wad_name.set("No champion wad found in .fantome")
+					self._set_status("Aborted: .fantome does not contain a champion wad client.")
+					return
+				self._fantome_member_path = member
+				wad_name = Path(member).name
+				# store champion from wad basename (e.g., Sivir.wad.client -> sivir)
+				self._champion = wad_name.split('.')[0].lower()
+				self.detected_wad_name.set(f"Detected: {wad_name}")
 
-			self._set_status("Unpacking mod .wad.client (best-effort)...")
-			mod_unpack = mod_dir / 'unpacked'
-			ok_mod = self._try_extract_wad(mod_wad_path, mod_unpack, hashes_dir)
+				# extract mod wad file (using exact member path)
+				self._set_status("Extracting mod .wad.client from .fantome...")
+				mod_wad_path = mod_dir / wad_name
+				self._extract_file_from_fantome(fantome, member, mod_wad_path)
 
-			self._set_status("Unpacking fresh .wad.client (best-effort)...")
-			fresh_unpack = fresh_dir / 'unpacked'
-			ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
+				# find fresh wad in champions, with '.clien' → '.client' fallback
+				self._set_status("Locating fresh .wad.client in Champions folder...")
+				fresh_wad_file = self._find_fresh_wad(champs_dir, wad_name)
+				if not fresh_wad_file.exists() and wad_name.lower().endswith('.wad.clien'):
+					fixed = wad_name + 't'
+					fresh_wad_file = self._find_fresh_wad(champs_dir, fixed)
+					if fresh_wad_file.exists():
+						wad_name = fixed
+				if not fresh_wad_file.exists():
+					self._set_status(f"Aborted: could not find {wad_name} under Champions folder.")
+					return
+				# copy fresh wad to work dir for transparency
+				fresh_wad_copy = fresh_dir / wad_name
+				shutil.copy2(fresh_wad_file, fresh_wad_copy)
+
+				self._set_status("Unpacking mod .wad.client (best-effort)...")
+				mod_unpack = mod_dir / 'unpacked'
+				ok_mod = self._try_extract_wad(mod_wad_path, mod_unpack, hashes_dir)
+
+				self._set_status("Unpacking fresh .wad.client (best-effort)...")
+				fresh_unpack = fresh_dir / 'unpacked'
+				ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
 
 			# After fresh extract, run TEX→DDS conversion using LtMAO.Ritoddstex if available
 			try:
@@ -1897,43 +2030,113 @@ class WizardApp:
 		
 		self._set_status(f"Created {created_count} placeholder texture files.")
 	
+	def _create_info_json(self, champ: str, is_new: bool) -> str:
+		"""Create a basic info.json for the fantome"""
+		import json
+		from datetime import datetime
+		
+		info = {
+			"Name": f"{champ.capitalize()} Repathed Mod",
+			"Author": "League Mod Repather",
+			"Version": "1.0.0",
+			"Description": f"Repathed mod for {champ.capitalize()}. Created with League Mod Repather.",
+			"CreatedDate": datetime.now().strftime("%Y-%m-%d")
+		}
+		
+		return json.dumps(info, indent=2, ensure_ascii=False)
+	
+	def _update_info_json(self, original_json: str) -> str:
+		"""Update existing info.json to indicate it's been repathed"""
+		import json
+		try:
+			info = json.loads(original_json)
+			# Add repathed suffix to name if not already present
+			if 'Name' in info and 'repathed' not in info['Name'].lower():
+				info['Name'] = f"{info['Name']} (Repathed)"
+			# Update description
+			if 'Description' in info:
+				info['Description'] = f"{info['Description']}\n\nRepathed with League Mod Repather."
+			else:
+				info['Description'] = "Repathed with League Mod Repather."
+			return json.dumps(info, indent=2, ensure_ascii=False)
+		except Exception:
+			# If parsing fails, return original
+			return original_json
+	
 	def _create_final_fantome(self, repathed_dir: Path, missing_count: int):
 		"""Create the final fantome with all fixes applied"""
 		try:
 			work_root = self._work_root()
 			
-			# Get fantome info
-			fantome = Path(self.fantome_path.get().strip())
-			member = getattr(self, '_fantome_member_path', None)
-			if not member:
-				self._set_status("Error: Original wad member path unknown")
+			# Determine champion name and wad name
+			champ = getattr(self, '_champion', '').lower()
+			if not champ:
+				self._set_status("Error: Champion name unknown")
 				return
-			
-			wad_name = Path(member).name
+			wad_name = f"{champ}.wad.client"
 			
 			# Pack repathed_dir -> new wad
 			final_wad_path = work_root / f"final_{wad_name}"
 			self._set_status("Packing WAD from repathed folder...")
 			self._pack_wad(repathed_dir, final_wad_path)
 			
-			# Build final fantome
-			final_fantome = fantome.with_name(f"{fantome.stem}_repathed{fantome.suffix}")
-			self._set_status(f"Creating final fantome: {final_fantome.name}")
+			# Check if using fantome or mod folder mode
+			fantome_path = self.fantome_path.get().strip()
+			mod_folder_path = self.mod_folder_path.get().strip()
 			
-			import zipfile as _zip
-			with _zip.ZipFile(fantome, 'r') as zin, _zip.ZipFile(final_fantome, 'w', compression=_zip.ZIP_DEFLATED) as zout:
-				for item in zin.infolist():
-					data = zin.read(item.filename)
-					# Case-insensitive comparison for WAD paths
-					item_path_normalized = item.filename.replace('\\', '/').lower()
-					member_path_normalized = member.replace('\\', '/').lower()
-					if item_path_normalized == member_path_normalized:
-						# replace with final wad
-						with open(final_wad_path, 'rb') as f:
-							data = f.read()
-						zout.writestr(item.filename, data)
-					else:
-						zout.writestr(item, data)
+			if mod_folder_path:
+				# MOD FOLDER MODE: Create new fantome from scratch
+				final_fantome = work_root / f"{champ}_repathed.fantome"
+				self._set_status(f"Creating new fantome: {final_fantome.name}")
+				
+				import zipfile as _zip
+				with _zip.ZipFile(final_fantome, 'w', compression=_zip.ZIP_DEFLATED) as zout:
+					# Add the repathed WAD
+					zout.write(final_wad_path, f"WAD/{wad_name}")
+					
+					# Create and add info.json
+					info_json = self._create_info_json(champ, is_new=True)
+					zout.writestr("META/info.json", info_json)
+				
+			else:
+				# FANTOME MODE: Copy original fantome and replace the champion WAD
+				fantome = Path(fantome_path)
+				member = getattr(self, '_fantome_member_path', None)
+				if not member:
+					self._set_status("Error: Original wad member path unknown")
+					return
+				
+				# Build final fantome
+				final_fantome = fantome.with_name(f"{fantome.stem}_repathed{fantome.suffix}")
+				self._set_status(f"Creating final fantome: {final_fantome.name}")
+				
+				import zipfile as _zip
+				with _zip.ZipFile(fantome, 'r') as zin, _zip.ZipFile(final_fantome, 'w', compression=_zip.ZIP_DEFLATED) as zout:
+					has_info_json = False
+					for item in zin.infolist():
+						data = zin.read(item.filename)
+						# Case-insensitive comparison for WAD paths
+						item_path_normalized = item.filename.replace('\\', '/').lower()
+						member_path_normalized = member.replace('\\', '/').lower()
+						
+						# Check if this is info.json
+						if item_path_normalized in ['meta/info.json', 'info.json']:
+							has_info_json = True
+							# Update info.json with repathed suffix
+							info_json = self._update_info_json(data.decode('utf-8'))
+							zout.writestr(item.filename, info_json)
+						elif item_path_normalized == member_path_normalized:
+							# replace with final wad
+							with open(final_wad_path, 'rb') as f:
+								data = f.read()
+							zout.writestr(item.filename, data)
+						else:
+							zout.writestr(item, data)
+					
+					# If original fantome didn't have info.json, create one
+					if not has_info_json:
+						info_json = self._create_info_json(champ, is_new=False)
+						zout.writestr("META/info.json", info_json)
 			
 			# Cleanup final wad
 			if final_wad_path.exists():
