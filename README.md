@@ -116,8 +116,8 @@ A: This is normal for large mods! Wait 2-5 minutes. ☕
 
 Built upon the excellent work of:
 
-- **[GuiSai (GuiSaiUwU)](https://github.com/GuiSaiUwU)** - Creator of [pyRitoFile](https://github.com/GuiSaiUwU/pyritofile-package)
-- **[tarngaina](https://github.com/tarngaina)** - Creator of [LtMAO-hai](https://github.com/tarngaina/LtMAO)
+- **[GuiSai (GuiSaiUwU)](https://github.com/GuiSaiUwU)** - Creator of [pyRitoFile](https://github.com/GuiSaiUwU/pyritofile-package)? Used healthbar fix and staticmatfix code
+- **[tarngaina](https://github.com/tarngaina)** - Creator of [pyRitoFile](https://github.com/GuiSaiUwU/pyritofile-package) Creator of [LtMAO-hai](https://github.com/tarngaina/LtMAO)
 - **CommunityDragon** - Hash tables from [CommunityDragon/Data](https://github.com/CommunityDragon/Data)
 
 Special thanks to the League modding community! 💜
