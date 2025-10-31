@@ -1181,6 +1181,7 @@ class WizardApp:
 		
 		# Local repath engine with custom prefix
 		bum = self._LocalBum(self._project_root(), custom_prefix=prefix)
+		
 		bum.add_source_dirs([str(fresh_unpack)])
 		# Determine champion and desired skin index
 		champ = getattr(self, '_champion', '').lower()
@@ -1619,6 +1620,16 @@ class WizardApp:
 				except Exception as e:
 					self._set_status(f"Hash extraction skipped: {e}")
 
+			# Convert DDS↔TEX in mod subfolders BEFORE overlay
+			# This ensures mod's edited textures match what BINs reference
+			champ = getattr(self, '_champion', '').lower()
+			try:
+				self._set_status("Converting textures in character subfolders (before overlay)...")
+				self._convert_dds_tex_in_subfolders(fresh_unpack, mod_unpack, champ)
+			except Exception as e:
+				self._set_status(f"Texture conversion skipped: {e}")
+				print(f"[DEBUG] Texture conversion error: {e}")
+			
 			# Overlay: copy mod extracted content over fresh extracted content (overwrite)
 			self._set_status("Overlaying mod over fresh (overwrite)...")
 			copied, skipped = self._overlay_copy(mod_unpack, fresh_unpack)
@@ -1730,6 +1741,270 @@ class WizardApp:
 				except Exception:
 					failed += 1
 		self._set_status(f"TEX→DDS: converted {converted}, failed {failed}")
+	
+	# ---------- DDS → TEX conversion ----------
+	def _dds2tex(self, dds_path: Path, tex_path: Path) -> None:
+		"""Convert DDS file to TEX format using LtMAO's Ritoddstex logic. If file is actually a TEX file, just rename it."""
+		import pyRitoFile
+		import math
+		import struct
+		
+		# First, try to read as TEX file (in case it's a misnamed TEX file)
+		try:
+			tex = pyRitoFile.tex.TEX().read(str(dds_path))
+			# If successful, it's actually a TEX file - just copy/rename it
+			tex.write(str(tex_path))
+			return
+		except Exception:
+			# Not a TEX file, continue with DDS parsing
+			pass
+		
+		# Read DDS header - matching LtMAO's Ritoddstex.dds2tex implementation
+		with pyRitoFile.stream.BytesStream.reader(str(dds_path)) as bs:
+			signature, = bs.read_u32()
+			if signature != 0x20534444:  # "DDS "
+				raise ValueError(f"Invalid DDS file (wrong signature): {dds_path}")
+			
+			# Read all 31 uints at once (matching LtMAO)
+			uints = bs.read_u32(31)
+			dds_header = {
+				'dwSize': uints[0],
+				'dwFlags': uints[1],
+				'dwHeight': uints[2],
+				'dwWidth': uints[3],
+				'dwPitchOrLinearSize': uints[4],
+				'dwDepth': uints[5],
+				'dwMipMapCount': uints[6],
+				'dwReserved1': uints[7:7+11],
+				'ddspf': {
+					'dwSize': uints[18],
+					'dwFlags': uints[19],
+					'dwFourCC': uints[20],
+					'dwRGBBitCount': uints[21],
+					'dwRBitMask': uints[22],
+					'dwGBitMask': uints[23],
+					'dwBBitMask': uints[24],
+					'dwABitMask': uints[25],
+				},
+				'dwCaps': uints[26],
+				'dwCaps2': uints[27],
+				'dwCaps3': uints[28],
+				'dwCaps4': uints[29],
+				'dwReserved2': uints[30],
+			}
+			dds_pixel_format = dds_header['ddspf']
+			
+			# Read all remaining data at once
+			dds_data = bs.read(-1)
+		
+		# RGBA conversion handling (matching LtMAO)
+		custom_rgba_format = False
+		rgba_indices = [-1, -1, -1, -1]
+		mask_to_index = {
+			0x000000ff: 0,
+			0x0000ff00: 1,
+			0x00ff0000: 2,
+			0xff000000: 3
+		}
+		
+		# Prepare TEX header
+		tex = pyRitoFile.tex.TEX()
+		tex.width = dds_header['dwWidth']
+		tex.height = dds_header['dwHeight']
+		
+		# Determine TEX format from DDS pixel format
+		if dds_pixel_format['dwFourCC'] == int('DXT1'.encode('ascii')[::-1].hex(), 16):
+			tex.format = pyRitoFile.tex.TEXFormat.DXT1
+		elif dds_pixel_format['dwFourCC'] == int('DXT5'.encode('ascii')[::-1].hex(), 16):
+			tex.format = pyRitoFile.tex.TEXFormat.DXT5
+		elif (dds_pixel_format['dwFlags'] & 0x00000041) == 0x00000041:
+			tex.format = pyRitoFile.tex.TEXFormat.BGRA8
+			if dds_pixel_format['dwRGBBitCount'] != 32:
+				raise ValueError(f"dwRGBBitCount is expected 32, not {dds_pixel_format['dwRGBBitCount']}")
+			if (dds_pixel_format['dwBBitMask'] != 0x000000ff or 
+			    dds_pixel_format['dwGBitMask'] != 0x0000ff00 or 
+			    dds_pixel_format['dwRBitMask'] != 0x00ff0000 or 
+			    dds_pixel_format['dwABitMask'] != 0xff000000):
+				custom_rgba_format = True
+				rgba_indices[0] = mask_to_index[dds_pixel_format['dwRBitMask']]
+				rgba_indices[1] = mask_to_index[dds_pixel_format['dwGBitMask']]
+				rgba_indices[2] = mask_to_index[dds_pixel_format['dwBBitMask']]
+				rgba_indices[3] = mask_to_index[dds_pixel_format['dwABitMask']]
+				for index in rgba_indices:
+					if index == -1:
+						raise ValueError(f"Bitmask data invalid. Cannot convert to BGRA output format.")
+		else:
+			raise ValueError(f"Unsupported DDS format: {dds_pixel_format['dwFourCC']}")
+		
+		# Handle mipmaps
+		if dds_header['dwMipMapCount'] > 1:
+			expected_mipmap_count = math.floor(math.log2(max(dds_header['dwWidth'], dds_header['dwHeight']))) + 1
+			if dds_header['dwMipMapCount'] != expected_mipmap_count:
+				raise ValueError(f"Wrong DDS mipmap count: {dds_header['dwMipMapCount']}, expected: {expected_mipmap_count}")
+			tex.mipmaps = True
+		
+		# RGBA conversion if needed
+		if custom_rgba_format:
+			new_data = b''
+			r_index, g_index, b_index, a_index = rgba_indices
+			for i in range(0, len(dds_data), 4):
+				current_pixel_data = 0
+				current_pixel_data |= dds_data[i + b_index] << 0
+				current_pixel_data |= dds_data[i + g_index] << 8
+				current_pixel_data |= dds_data[i + r_index] << 16
+				current_pixel_data |= dds_data[i + a_index] << 24
+				new_data += struct.pack('I', current_pixel_data)
+			dds_data = new_data
+		
+		# Prepare TEX data (matching LtMAO's mipmap extraction)
+		if tex.mipmaps:
+			if tex.format == pyRitoFile.tex.TEXFormat.DXT1:
+				block_size = 4
+				bytes_per_block = 8
+			elif tex.format == pyRitoFile.tex.TEXFormat.DXT5:
+				block_size = 4
+				bytes_per_block = 16
+			else:
+				block_size = 1
+				bytes_per_block = 4
+			
+			mipmap_count = dds_header['dwMipMapCount']
+			current_offset = 0
+			tex.data = []
+			for i in range(mipmap_count):
+				current_width = max(tex.width >> i, 1)
+				current_height = max(tex.height >> i, 1)
+				block_width = (current_width + block_size - 1) // block_size
+				block_height = (current_height + block_size - 1) // block_size
+				current_size = bytes_per_block * block_width * block_height
+				data = dds_data[current_offset:current_offset+current_size]
+				tex.data.append(data)
+				current_offset += current_size
+			# Mipmap in DDS file is reversed to TEX file
+			tex.data.reverse()
+		else:
+			tex.data = [dds_data]
+		
+		# Write TEX file
+		tex.write(str(tex_path))
+	
+	def _convert_dds_tex_in_subfolders(self, fresh_unpack: Path, mod_unpack: Path, main_champion: str) -> None:
+		"""
+		Convert DDS↔TEX in mod's asset subfolders based on fresh unpack structure.
+		1. Scan fresh_unpack/data/characters/ to find subfolders (excluding main champion)
+		2. For each subfolder found, check mod_unpack/assets/characters/{subfolder}/
+		3. In those mod folders: convert DDS→TEX if DDS exists, or TEX→DDS if no DDS but TEX exists
+		"""
+		fresh_unpack = Path(fresh_unpack)
+		mod_unpack = Path(mod_unpack)
+		
+		if not fresh_unpack.exists() or not mod_unpack.exists():
+			return
+		
+		converted_dds_to_tex = 0
+		converted_tex_to_dds = 0
+		failed = 0
+		main_champion_lower = main_champion.lower() if main_champion else ""
+		
+		# Step 1: Find subfolders in fresh_unpack/data/characters/ (excluding main champion)
+		fresh_data_chars = fresh_unpack / 'data' / 'characters'
+		subfolders = []
+		
+		print(f"[DEBUG] Checking for subfolders in: {fresh_data_chars}")
+		print(f"[DEBUG] Main champion to exclude: {main_champion_lower}")
+		
+		if fresh_data_chars.exists():
+			for char_dir in fresh_data_chars.iterdir():
+				if char_dir.is_dir():
+					char_name = char_dir.name.lower()
+					print(f"[DEBUG] Found character folder: {char_dir.name} (lower: {char_name})")
+					# Include all subfolders except the main champion
+					if char_name != main_champion_lower:
+						subfolders.append(char_dir.name)
+						print(f"[DEBUG] Added subfolder: {char_dir.name}")
+		
+		if not subfolders:
+			self._set_status("No character subfolders found in fresh unpack.")
+			print(f"[DEBUG] No subfolders found (excluding {main_champion_lower})")
+			return
+		
+		print(f"[DEBUG] Subfolders to process: {subfolders}")
+		
+		# Step 2: For each subfolder, convert in mod_unpack/assets/characters/{subfolder}/
+		for subfolder in subfolders:
+			mod_assets_subfolder = mod_unpack / 'assets' / 'characters' / subfolder
+			
+			print(f"[DEBUG] Checking mod folder: {mod_assets_subfolder}")
+			
+			if not mod_assets_subfolder.exists():
+				print(f"[DEBUG] Mod folder does not exist: {mod_assets_subfolder}")
+				continue
+			
+			print(f"[DEBUG] Processing mod folder: {mod_assets_subfolder}")
+			
+			# Walk through the subfolder and convert files
+			files_found = 0
+			for dirpath, _dirnames, filenames in os.walk(mod_assets_subfolder):
+				current_path = Path(dirpath)
+				
+				for name in filenames:
+					name_lower = name.lower()
+					files_found += 1
+					
+					if name_lower.endswith('.dds'):
+						# Found DDS: convert to TEX
+						dds_path = current_path / name
+						tex_path = dds_path.with_suffix('.tex')
+						
+						print(f"[DEBUG] Found DDS: {dds_path}")
+						
+						# Skip if TEX already exists
+						if tex_path.exists():
+							print(f"[DEBUG] TEX already exists, skipping: {tex_path}")
+							continue
+						
+						try:
+							print(f"[DEBUG] Converting DDS→TEX: {dds_path} -> {tex_path}")
+							self._dds2tex(dds_path, tex_path)
+							converted_dds_to_tex += 1
+							print(f"[DEBUG] Successfully converted DDS→TEX: {dds_path}")
+						except Exception as e:
+							failed += 1
+							print(f"[DEBUG] Failed to convert DDS→TEX {dds_path}: {e}")
+							import traceback
+							traceback.print_exc()
+					
+					elif name_lower.endswith('.tex'):
+						# Found TEX: check if corresponding DDS exists
+						tex_path = current_path / name
+						dds_path = tex_path.with_suffix('.dds')
+						
+						print(f"[DEBUG] Found TEX: {tex_path}")
+						
+						# Only convert TEX→DDS if no DDS exists
+						if not dds_path.exists():
+							try:
+								print(f"[DEBUG] Converting TEX→DDS: {tex_path} -> {dds_path}")
+								self._tex2dds(tex_path, dds_path)
+								converted_tex_to_dds += 1
+								print(f"[DEBUG] Successfully converted TEX→DDS: {tex_path}")
+							except Exception as e:
+								failed += 1
+								print(f"[DEBUG] Failed to convert TEX→DDS {tex_path}: {e}")
+								import traceback
+								traceback.print_exc()
+			
+			print(f"[DEBUG] Total files found in {mod_assets_subfolder}: {files_found}")
+		
+		if converted_dds_to_tex > 0 or converted_tex_to_dds > 0 or failed > 0:
+			status_parts = []
+			if converted_dds_to_tex > 0:
+				status_parts.append(f"DDS→TEX: {converted_dds_to_tex}")
+			if converted_tex_to_dds > 0:
+				status_parts.append(f"TEX→DDS: {converted_tex_to_dds}")
+			if failed > 0:
+				status_parts.append(f"failed: {failed}")
+			self._set_status(f"Texture conversion in subfolders: {', '.join(status_parts)}")
 
 	def _populate_bin_dropdown(self, mod_unpack: Path):
 		"""Populate the BIN dropdown with available skin BINs from the mod"""
