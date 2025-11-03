@@ -10,6 +10,8 @@ When Riot Games updates League of Legends, old mods often stop working. This too
 
 ## 📚 Tutorial - How to Use
 
+<img width="899" height="296" alt="image" src="https://github.com/user-attachments/assets/2edd7b89-e778-4593-809b-7ddf15353145" />
+
 ### **First Time Setup** (One-time only)
 
 1. **Download** `LeagueModRepather.exe` and run it
