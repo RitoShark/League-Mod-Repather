@@ -51,9 +51,17 @@ class WizardApp:
 		self.main_bin_choice = tk.StringVar(value="Skin0")
 		self.hash_status = tk.StringVar(value="Checking hashes...")
 		self.custom_prefix = tk.StringVar()  # Custom prefix for repathing
+		self.no_skin_lite_enabled = tk.BooleanVar(value=False)  # No Skin Lite checkbox
+		self.bulk_fantome_paths = []  # List of fantome paths for bulk processing
 
 		# internal: store full member path inside .fantome
 		self._fantome_member_path = None
+		# internal: store HUD folder path from mod before repathing
+		self._mod_hud_folder = None
+		# internal: bulk processing state
+		self._bulk_current_index = 0
+		self._bulk_total_count = 0
+		self._current_fantome_index = 0  # Current fantome being processed in bulk mode
 		
 		# Step completion tracking
 		self.step_completed = [False, False, False, False]  # Track if each step is completed
@@ -118,6 +126,24 @@ class WizardApp:
 		
 		# Pick one random word
 		return random.choice(cool_words)
+	
+	def _show_no_skin_lite_info(self):
+		"""Show information about No Skin Lite feature"""
+		info_text = (
+			"No Skin Lite Feature\n\n"
+			"When enabled, this will:\n"
+			"• Take your selected Base/Skin0\n"
+			"• Copy it to all other skin slots (1-99)\n"
+			"• Make every skin look like the base skin\n\n"
+			"Example: If you select Skin0/Base, all skins (Skin1-Skin99) will become Skin0.\n\n"
+			"⚠️ IMPORTANT: ONLY works with Base/Skin0 selection, NOT Skin1+.\n"
+			"This prevents skin hacking by ensuring only base skin is copied.\n\n"
+			"This is useful for:\n"
+			"• Creating 'no skin' mods where everything uses base skin\n"
+			"• Simplifying skin selection in-game\n"
+			"• Ensuring all skins show the base appearance"
+		)
+		messagebox.showinfo("No Skin Lite Info", info_text)
 
 	def _build_layout(self):
 		self.container = self._frame(self.root)
@@ -171,25 +197,14 @@ class WizardApp:
 
 		row2 = self._frame(s1)
 		row2.pack(fill=tk.X, padx=12, pady=6)
-		self._label(row2, text=".fantome file:").pack(side=tk.LEFT)
+		self._label(row2, text="Your mod:").pack(side=tk.LEFT)
+		self.mod_folder_path = tk.StringVar()
 		e2 = self._entry(row2, textvariable=self.fantome_path, width=80)
 		e2.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
-		self._button(row2, text="Browse", command=self._pick_fantome).pack(side=tk.LEFT)
-		
-		# OR separator
-		or_label = self._label(s1, text="— OR —", font=('Arial', 9, 'bold'), foreground='gray')
-		or_label.pack(pady=6)
-		
-		row2b = self._frame(s1)
-		row2b.pack(fill=tk.X, padx=12, pady=6)
-		self._label(row2b, text="Mod folder:").pack(side=tk.LEFT)
-		self.mod_folder_path = tk.StringVar()
-		e2b = self._entry(row2b, textvariable=self.mod_folder_path, width=80)
-		e2b.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
-		self._button(row2b, text="Browse", command=self._pick_mod_folder).pack(side=tk.LEFT)
+		self._button(row2, text="Browse", command=self._pick_mod).pack(side=tk.LEFT)
 		
 		# Hint label
-		mod_hint = self._label(s1, text="💡 Select a .fantome file OR a pre-extracted mod folder (champion will be auto-detected)", 
+		mod_hint = self._label(s1, text="💡 Select .fantome file(s) or a mod folder - You can select multiple .fantome files for bulk processing", 
 		                       font=('Arial', 8), foreground='gray')
 		mod_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 
@@ -204,6 +219,25 @@ class WizardApp:
 		prefix_hint = self._label(s1, text="💡 Leave empty for random prefix (e.g., 'shadow', 'dragon', 'void'). Enter custom prefix (e.g., 'mymod', 'custom') for consistent naming.", 
 		                          font=('Arial', 8), foreground='gray')
 		prefix_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+
+		# No Skin Lite checkbox with info icon
+		row4 = self._frame(s1)
+		row4.pack(fill=tk.X, padx=12, pady=6)
+		
+		if tb:
+			no_skin_checkbox = tb.Checkbutton(row4, text="No Skin Lite", variable=self.no_skin_lite_enabled)
+		else:
+			no_skin_checkbox = tk.Checkbutton(row4, text="No Skin Lite", variable=self.no_skin_lite_enabled)
+		no_skin_checkbox.pack(side=tk.LEFT)
+		
+		# Info button with tooltip
+		info_btn = self._button(row4, text="ℹ️", width=3, command=self._show_no_skin_lite_info)
+		info_btn.pack(side=tk.LEFT, padx=4)
+		
+		# Hint label for No Skin Lite
+		no_skin_hint = self._label(s1, text="💡 Copies Base/Skin0 to all other skin slots (1-99) - ONLY works with Base/Skin0 to prevent skin hacking", 
+		                            font=('Arial', 8), foreground='gray')
+		no_skin_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 
 		self.steps.append(s1)
 
@@ -299,10 +333,18 @@ class WizardApp:
 				return
 			# Mark step 0 as completed
 			self.step_completed[0] = True
-			# start detection/extraction in a background thread
-			self._show_step(1)
-			t = threading.Thread(target=self._detect_and_extract, daemon=True)
-			t.start()
+			# Check if bulk processing (multiple fantome files)
+			if self.bulk_fantome_paths and len(self.bulk_fantome_paths) > 1:
+				# Bulk processing mode - automatically use Skin0 and process all files
+				self.main_bin_choice.set("Skin0")  # Auto-set to Skin0 for bulk processing
+				self._show_step(1)
+				t = threading.Thread(target=self._process_bulk_fantomes, daemon=True)
+				t.start()
+			else:
+				# Single file mode - normal flow
+				self._show_step(1)
+				t = threading.Thread(target=self._detect_and_extract, daemon=True)
+				t.start()
 		elif self.current_step == 1:
 			# Can't proceed from step 1 if extraction isn't complete
 			if not self.step_completed[1]:
@@ -327,19 +369,72 @@ class WizardApp:
 			self.champions_dir.set(path)
 			self._save_config()
 
-	def _pick_fantome(self):
-		path = filedialog.askopenfilename(title="Select .fantome file", filetypes=[("Fantome", "*.fantome"), ("Zip", "*.zip"), ("All", "*.*")])
-		if path:
-			self.fantome_path.set(path)
-			# Clear mod folder if fantome is selected
-			self.mod_folder_path.set("")
-	
-	def _pick_mod_folder(self):
-		path = filedialog.askdirectory(title="Select pre-extracted mod folder")
-		if path:
-			self.mod_folder_path.set(path)
-			# Clear fantome if mod folder is selected
-			self.fantome_path.set("")
+	def _pick_mod(self):
+		"""Unified file picker that handles both .fantome files and folders"""
+		# Create custom dialog
+		dialog = tk.Toplevel(self.root)
+		dialog.title(APP_TITLE)
+		dialog.geometry("400x180")
+		dialog.resizable(False, False)
+		dialog.transient(self.root)
+		dialog.grab_set()
+		
+		# Center the dialog
+		dialog.update_idletasks()
+		x = (dialog.winfo_screenwidth() // 2) - (400 // 2)
+		y = (dialog.winfo_screenheight() // 2) - (180 // 2)
+		dialog.geometry(f"400x180+{x}+{y}")
+		
+		result = {'choice': None}
+		
+		# Message
+		msg = tk.Label(dialog, text="Select mod type:", font=("Segoe UI", 12, "bold"))
+		msg.pack(pady=(30, 20))
+		
+		# Button frame
+		btn_frame = tk.Frame(dialog)
+		btn_frame.pack(pady=10)
+		
+		def choose_fantome():
+			result['choice'] = 'fantome'
+			dialog.destroy()
+		
+		def choose_folder():
+			result['choice'] = 'folder'
+			dialog.destroy()
+		
+		# Buttons
+		fantome_btn = tk.Button(btn_frame, text=".fantome File", command=choose_fantome, 
+								width=15, height=2, font=("Segoe UI", 10))
+		fantome_btn.pack(side=tk.LEFT, padx=10)
+		
+		folder_btn = tk.Button(btn_frame, text="Mod Folder", command=choose_folder,
+							   width=15, height=2, font=("Segoe UI", 10))
+		folder_btn.pack(side=tk.LEFT, padx=10)
+		
+		dialog.wait_window()
+		
+		if result['choice'] == 'fantome':
+			# Pick .fantome file(s) - allow multiple selection
+			paths = filedialog.askopenfilenames(
+				title="Select .fantome file(s) - You can select multiple files",
+				filetypes=[("Fantome", "*.fantome"), ("Zip", "*.zip"), ("All", "*.*")]
+			)
+			if paths:
+				self.bulk_fantome_paths = list(paths)
+				if len(paths) == 1:
+					self.fantome_path.set(paths[0])
+					self.mod_folder_path.set("")
+				else:
+					# Show "X files selected" in the entry field
+					self.fantome_path.set(f"{len(paths)} files selected: {', '.join([Path(p).name for p in paths[:3]])}{'...' if len(paths) > 3 else ''}")
+					self.mod_folder_path.set("")
+		elif result['choice'] == 'folder':
+			# Pick folder
+			path = filedialog.askdirectory(title="Select mod folder")
+			if path:
+				self.fantome_path.set(path)
+				self.mod_folder_path.set(path)
 
 	def _validate_inputs(self) -> bool:
 		champs = self.champions_dir.get().strip()
@@ -355,20 +450,29 @@ class WizardApp:
 		except Exception:
 			pass
 		
-		# Check if either fantome OR mod folder is provided (not both)
-		if fantome and mod_folder:
+		# Check if we have bulk fantome paths (multiple files selected)
+		if self.bulk_fantome_paths:
+			# Validate all bulk paths
+			for path in self.bulk_fantome_paths:
+				if not os.path.isfile(path):
+					messagebox.showerror(APP_TITLE, f"Invalid file: {path}")
+					return False
+				if not (path.lower().endswith(".fantome") or path.lower().endswith(".zip")):
+					messagebox.showerror(APP_TITLE, f"File must be a .fantome or .zip archive: {Path(path).name}")
+					return False
+			return True
+		
+		# Check if either fantome OR mod folder is provided (not both, unless they're the same path for folder mode)
+		if fantome and mod_folder and fantome != mod_folder:
 			messagebox.showerror(APP_TITLE, "Please select EITHER a .fantome file OR a mod folder, not both.")
 			return False
 		
-		if fantome:
+		if fantome and os.path.isfile(fantome):
 			# Validate fantome file
-			if not os.path.isfile(fantome):
-				messagebox.showerror(APP_TITLE, "Please select a valid .fantome file.")
-				return False
 			if not (fantome.lower().endswith(".fantome") or fantome.lower().endswith(".zip")):
 				messagebox.showerror(APP_TITLE, "File must be a .fantome or .zip archive.")
 				return False
-		elif mod_folder:
+		elif mod_folder or (fantome and os.path.isdir(fantome)):
 			# Validate mod folder
 			if not os.path.isdir(mod_folder):
 				messagebox.showerror(APP_TITLE, "Please select a valid mod folder.")
@@ -855,6 +959,237 @@ class WizardApp:
 				except Exception as e:
 					print(f"[DEBUG] Failed to copy VO file {src_file}: {e}")
 		return vo_count
+	
+	def _store_mod_hud_folder(self, mod_unpack: Path, champion: str) -> None:
+		"""Store the HUD folder from mod before repathing so we can restore it later with prefix."""
+		champ = champion.lower() if champion else ''
+		if not champ:
+			return
+		
+		# Look for HUD folder in mod: assets/characters/{champion}/hud
+		hud_path = mod_unpack / 'assets' / 'characters' / champ / 'hud'
+		
+		if hud_path.exists() and hud_path.is_dir():
+			self._mod_hud_folder = hud_path
+			print(f"[DEBUG] Stored mod HUD folder: {hud_path}")
+		else:
+			# Try alternative paths (case-insensitive search)
+			assets_chars = mod_unpack / 'assets' / 'characters'
+			if assets_chars.exists():
+				for char_dir in assets_chars.iterdir():
+					if char_dir.is_dir() and char_dir.name.lower() == champ:
+						alt_hud = char_dir / 'hud'
+						if alt_hud.exists() and alt_hud.is_dir():
+							self._mod_hud_folder = alt_hud
+							print(f"[DEBUG] Stored mod HUD folder (alt path): {alt_hud}")
+							break
+	
+	def _fix_hud_paths_in_bin(self, bin_path: Path) -> tuple[bool, int]:
+		"""
+		Fix HUD texture paths in BIN file: change .dds to .tex if found.
+		Returns (modified, count_of_changes).
+		"""
+		if not bin_path or not bin_path.exists():
+			return (False, 0)
+		
+		changes_count = 0
+		modified = False
+		
+		try:
+			import pyRitoFile
+			bin_obj = pyRitoFile.bin.BIN().read(str(bin_path))
+			print(f"[DEBUG] Reading BIN file: {bin_path}")
+			print(f"[DEBUG] BIN has {len(bin_obj.entries)} entries")
+			
+			def fix_value(value, value_type, path_context=""):
+				nonlocal changes_count, modified
+				if value_type == pyRitoFile.bin.BINType.STRING:
+					if isinstance(value, str):
+						value_lower = value.lower()
+						# Look for HUD-related paths with .dds
+						if 'hud' in value_lower and '.dds' in value_lower:
+							# Check if it's a HUD-related texture (iconCircle, iconSquare, etc.)
+							if any(keyword in value_lower for keyword in ['icon', 'circle', 'square', 'hud']):
+								# Replace .dds with .tex (case-insensitive)
+								original = value
+								# Replace .dds with .tex (preserve case)
+								if '.DDS' in value:
+									value = value.replace('.DDS', '.TEX')
+								else:
+									value = value.replace('.dds', '.tex')
+								if value != original:
+									changes_count += 1
+									modified = True
+									print(f"[DEBUG] Fixed HUD path in BIN ({path_context}): {original} -> {value}")
+								return value
+				elif value_type in (pyRitoFile.bin.BINType.LIST, pyRitoFile.bin.BINType.LIST2):
+					if hasattr(value, 'data'):
+						value.data = [fix_value(v, value_type, path_context) for v in value.data]
+				elif value_type in (pyRitoFile.bin.BINType.EMBED, pyRitoFile.bin.BINType.POINTER):
+					if hasattr(value, 'data') and value.data is not None:
+						for f in value.data:
+							fix_field(f, path_context)
+				return value
+			
+			def fix_field(field, path_context=""):
+				nonlocal changes_count, modified
+				field_hash = getattr(field, 'hash', 'unknown')
+				current_context = f"field:{field_hash}"
+				
+				if field.type in (pyRitoFile.bin.BINType.LIST, pyRitoFile.bin.BINType.LIST2):
+					if hasattr(field, 'data'):
+						field.data = [fix_value(v, field.value_type, current_context) for v in field.data]
+				elif field.type in (pyRitoFile.bin.BINType.EMBED, pyRitoFile.bin.BINType.POINTER):
+					if hasattr(field, 'data') and field.data is not None:
+						for f in field.data:
+							fix_field(f, current_context)
+				elif field.type == pyRitoFile.bin.BINType.MAP:
+					if hasattr(field, 'data'):
+						new_map = {}
+						for key, value in field.data.items():
+							new_key = fix_value(key, field.key_type, current_context)
+							new_value = fix_value(value, field.value_type, current_context)
+							new_map[new_key] = new_value
+						field.data = new_map
+				elif field.type == pyRitoFile.bin.BINType.OPTION:
+					if field.value_type == pyRitoFile.bin.BINType.STRING:
+						if hasattr(field, 'data') and field.data is not None:
+							new_value = fix_value(field.data, field.value_type, current_context)
+							if new_value != field.data:
+								field.data = new_value
+				else:
+					# For basic types including STRING, directly modify field.data
+					if hasattr(field, 'data'):
+						new_value = fix_value(field.data, field.type, current_context)
+						if new_value != field.data:
+							field.data = new_value
+			
+			# Fix all entries
+			for entry_idx, entry in enumerate(bin_obj.entries):
+				entry_hash = getattr(entry, 'hash', 'unknown')
+				print(f"[DEBUG] Processing entry {entry_idx}: hash={entry_hash}")
+				for field in entry.data:
+					fix_field(field, f"entry:{entry_hash}")
+			
+			# Write back if modified
+			if modified:
+				print(f"[DEBUG] Writing modified BIN file back to: {bin_path}")
+				bin_obj.write(str(bin_path))
+				print(f"[DEBUG] Updated BIN file with {changes_count} HUD path changes")
+			else:
+				print(f"[DEBUG] No HUD .dds paths found to fix in BIN file")
+			
+		except Exception as e:
+			print(f"[DEBUG] Error fixing HUD paths in BIN: {e}")
+			import traceback
+			traceback.print_exc()
+		
+		return (modified, changes_count)
+	
+	def _copy_hud_files_with_prefix(self, hud_source: Path, dst_dir: Path, prefix: str, champion: str, bin_path: Path = None) -> tuple[int, int]:
+		"""
+		Copy HUD folder to repathed output with correct prefix and convert DDS↔TEX.
+		Special handling: icons2d folder is copied WITHOUT prefix (like VO files).
+		Checks BIN file to determine expected format and converts accordingly.
+		Returns (copied_count, converted_count)
+		"""
+		if not hud_source or not hud_source.exists():
+			return (0, 0)
+		
+		champ = champion.lower() if champion else ''
+		if not champ or not prefix:
+			return (0, 0)
+		
+		# BIN file should already be fixed before repathing, but we always expect .tex format
+		expected_format = 'tex'
+		
+		# Destination path with prefix: assets/{prefix}/characters/{champion}/hud
+		dst_hud_prefixed = dst_dir / 'assets' / prefix / 'characters' / champ / 'hud'
+		# Destination path without prefix for icons2d: assets/characters/{champion}/hud
+		dst_hud_no_prefix = dst_dir / 'assets' / 'characters' / champ / 'hud'
+		
+		copied = 0
+		converted = 0
+		
+		# Copy all files and convert DDS↔TEX as needed
+		for root, _dirs, files in os.walk(hud_source):
+			root_p = Path(root)
+			rel = root_p.relative_to(hud_source)
+			
+			# Check if we're in the icons2d folder (should be without prefix)
+			# rel will be like: "." (root), "icons2d", "icons2d/subfolder", etc.
+			is_icons2d = False
+			if rel != Path('.'):
+				rel_parts = rel.parts
+				# Check if icons2d is in the path
+				if rel_parts and rel_parts[0].lower() == 'icons2d':
+					is_icons2d = True
+				# Also check if any part of the path contains icons2d
+				if not is_icons2d:
+					for part in rel_parts:
+						if part.lower() == 'icons2d':
+							is_icons2d = True
+							break
+			
+			# Choose destination based on whether it's icons2d
+			if is_icons2d:
+				target_dir = dst_hud_no_prefix / rel
+			else:
+				target_dir = dst_hud_prefixed / rel
+			
+			target_dir.mkdir(parents=True, exist_ok=True)
+			
+			for f in files:
+				src_file = root_p / f
+				name_lower = f.lower()
+				
+				if name_lower.endswith('.dds'):
+					dst_dds = target_dir / f
+					dst_tex = target_dir / f"{src_file.stem}.tex"
+					
+					try:
+						# Copy DDS first
+						shutil.copy2(src_file, dst_dds)
+						copied += 1
+						
+						# Always convert DDS to TEX (BIN should reference .tex now)
+						if not dst_tex.exists():
+							try:
+								self._dds2tex(dst_dds, dst_tex)
+								converted += 1
+								location = "no-prefix" if is_icons2d else "prefixed"
+								print(f"[DEBUG] Converted HUD DDS→TEX ({location}): {src_file} -> {dst_tex}")
+							except Exception as e:
+								print(f"[DEBUG] Failed to convert HUD DDS→TEX {src_file}: {e}")
+					except Exception as e:
+						print(f"[DEBUG] Failed to copy HUD file {src_file}: {e}")
+				
+				elif name_lower.endswith('.tex'):
+					dst_tex = target_dir / f
+					dst_dds = target_dir / f"{src_file.stem}.dds"
+					
+					try:
+						# Copy TEX first
+						shutil.copy2(src_file, dst_tex)
+						copied += 1
+						
+						# TEX files are already correct format, no conversion needed
+						pass
+					except Exception as e:
+						print(f"[DEBUG] Failed to copy HUD file {src_file}: {e}")
+				
+				else:
+					# Other files: just copy
+					dst_file = target_dir / f
+					try:
+						shutil.copy2(src_file, dst_file)
+						copied += 1
+						location = "no-prefix" if is_icons2d else "prefixed"
+						print(f"[DEBUG] Copied HUD file ({location}): {src_file} -> {dst_file}")
+					except Exception as e:
+						print(f"[DEBUG] Failed to copy HUD file {src_file}: {e}")
+		
+		return (copied, converted)
 
 	# Hash storage (minimal version of LtMAO hash_helper.Storage)
 	class _HashStorage:
@@ -1162,6 +1497,253 @@ class WizardApp:
 					os.rmdir(root)
 			print(f'bumpath: Finish: Bum {output_dir}.')
 
+	def _apply_no_skin_lite_to_wad(self, repathed_dir: Path):
+		"""
+		Apply No Skin Lite: Copy the main skin BIN to all other skin slots (skin0-skin99).
+		This runs on the repathed directory after fixing missing textures.
+		Based on LtMAO no_skin.mini_no_skin logic.
+		Processes all character subfolders (main champion + subfolders like shacoboxes, annietibbers, etc.)
+		"""
+		import re
+		
+		# Load hash tables
+		hashes_dir = self._hash_dir()
+		WizardApp._HashStorage.read_all_hashes(hashes_dir)
+		
+		# Get champion and main skin selection
+		champ = getattr(self, '_champion', '').lower()
+		desired_raw = (self.main_bin_choice.get() or '').strip()
+		desired = desired_raw.lower()
+		
+		if not champ or not desired:
+			raise Exception("Champion or main skin not selected")
+		
+		# Extract skin index from desired (e.g., 'skin5' -> 5, 'base' -> 0)
+		if desired == 'base':
+			skin_idx = 0
+		else:
+			m = re.search(r"(skin)?\s*(\d+)", desired)
+			skin_idx = int(m.group(2)) if m else 0
+		
+		# No Skin Lite ONLY works with Base/Skin0 (prevents skin hacking with Skin1+)
+		if skin_idx != 0:
+			raise Exception("No Skin Lite only works with Base/Skin0, not Skin1+ (prevents skin hacking)")
+		
+		# Get the custom prefix used during repathing
+		prefix = getattr(self, '_used_prefix', 'bum')
+		
+		# Find ALL character subfolders and process each one
+		# This includes main champion folder and subfolders like shacoboxes, annietibbers, lantern, etc.
+		search_paths = [
+			repathed_dir / 'data' / prefix / 'characters',
+			repathed_dir / 'assets' / prefix / 'characters',
+			repathed_dir / 'data' / 'characters',  # Fallback without prefix
+			repathed_dir / 'assets' / 'characters'  # Fallback without prefix
+		]
+		
+		# Collect all character folders that have skins
+		character_folders_to_process = []
+		
+		for base_path in search_paths:
+			if not base_path.exists():
+				continue
+			
+			for char_folder in base_path.iterdir():
+				if not char_folder.is_dir():
+					continue
+				
+				skins_dir = char_folder / 'skins'
+				if not skins_dir.exists():
+					continue
+				
+				# Check if this folder has the main skin BIN (Skin0)
+				has_main_skin = False
+				for root, _dirs, files in os.walk(skins_dir):
+					for f in files:
+						if not f.lower().endswith('.bin'):
+							continue
+						
+						p = Path(root) / f
+						rel = Path(os.path.relpath(p, repathed_dir)).as_posix()
+						
+						# Check if this is the main skin BIN (Skin0)
+						if f"/skins/skin{skin_idx}/" in rel.lower() or f.lower() == f"skin{skin_idx}.bin":
+							character_folders_to_process.append((char_folder, base_path, p))
+							has_main_skin = True
+							break
+					
+					if has_main_skin:
+						break
+		
+		if not character_folders_to_process:
+			raise Exception(f"Main skin BIN (Skin{skin_idx}) not found in any character folder in repathed directory")
+		
+		print(f"[DEBUG] No Skin Lite: Found {len(character_folders_to_process)} character folder(s) to process")
+		
+		# Get hash values for the types we need (only need to do this once)
+		bin_hashes = {}
+		if 'hashes.bintypes.txt' in WizardApp._HashStorage.hashtables:
+			for hex_hash, raw_name in WizardApp._HashStorage.hashtables['hashes.bintypes.txt'].items():
+				bin_hashes[raw_name] = hex_hash
+		
+		scdp_hash = bin_hashes.get('SkinCharacterDataProperties')
+		rr_hash = bin_hashes.get('ResourceResolver')
+		mrr_field_hash = bin_hashes.get('mResourceResolver')
+		
+		# Convert field hash from binfields.txt if needed
+		if not mrr_field_hash and 'hashes.binfields.txt' in WizardApp._HashStorage.hashtables:
+			for hex_hash, raw_name in WizardApp._HashStorage.hashtables['hashes.binfields.txt'].items():
+				if raw_name == 'mResourceResolver':
+					mrr_field_hash = hex_hash
+					break
+		
+		total_copied_count = 0
+		
+		# Process each character folder (main champion + subfolders)
+		for char_folder, base_path, main_skin_bin in character_folders_to_process:
+			char_name = char_folder.name
+			print(f"[DEBUG] No Skin Lite: Processing character folder: {char_name}")
+			print(f"[DEBUG] No Skin Lite: Using main BIN: {main_skin_bin}")
+			
+			# First, read the source BIN once to get the original paths
+			source_bin = pyRitoFile.bin.BIN().read(str(main_skin_bin))
+			
+			# Find base_scdp, base_rr, and base_mrr from main skin
+			base_scdp = None
+			base_rr = None
+			base_mrr = None
+			
+			for entry in source_bin.entries:
+				if scdp_hash and entry.type == scdp_hash:
+					base_scdp = entry
+					for field in entry.data:
+						if mrr_field_hash and field.hash == mrr_field_hash:
+							base_mrr = field
+							break
+				elif rr_hash and entry.type == rr_hash:
+					base_rr = entry
+			
+			if not base_scdp:
+				print(f"[DEBUG] No Skin Lite: Warning - Could not find SkinCharacterDataProperties in {char_name}, skipping")
+				continue
+			
+			# Get the original SCDP and RR hash values from main skin
+			original_scdp_hash = base_scdp.hash
+			original_rr_hash = base_rr.hash if base_rr else None
+			
+			# Unhash to get the raw paths
+			base_scdp_path = None
+			base_rr_path = None
+			
+			if 'hashes.binentries.txt' in WizardApp._HashStorage.hashtables:
+				base_scdp_path = WizardApp._HashStorage.hashtables['hashes.binentries.txt'].get(original_scdp_hash)
+				if original_rr_hash:
+					base_rr_path = WizardApp._HashStorage.hashtables['hashes.binentries.txt'].get(original_rr_hash)
+			
+			# Get the base file path structure
+			main_skin_rel = main_skin_bin.relative_to(repathed_dir)
+			main_skin_str = str(main_skin_rel).replace('\\', '/')
+			
+			# Now copy main BIN to all other skin slots (1-99) and edit hash values
+			# IMPORTANT: Read the source BIN fresh for each iteration to avoid corruption
+			copied_count = 0
+			
+			for target_skin_idx in range(1, 100):  # Start from 1, skip 0 (base skin)
+				# Replace skin index in file path
+				target_skin_str = main_skin_str.replace(f'/skin{skin_idx}/', f'/skin{target_skin_idx}/')
+				target_skin_str = target_skin_str.replace(f'skin{skin_idx}.bin', f'skin{target_skin_idx}.bin')
+				
+				target_skin_path = repathed_dir / target_skin_str
+				target_skin_path.parent.mkdir(parents=True, exist_ok=True)
+				
+				try:
+					# CRITICAL: Read the source BIN fresh for each iteration
+					target_bin = pyRitoFile.bin.BIN().read(str(main_skin_bin))
+					
+					# Find the entries in this fresh copy
+					target_scdp = None
+					target_rr = None
+					target_mrr = None
+					
+					for entry in target_bin.entries:
+						if scdp_hash and entry.type == scdp_hash:
+							target_scdp = entry
+							for field in entry.data:
+								if mrr_field_hash and field.hash == mrr_field_hash:
+									target_mrr = field
+									break
+						elif rr_hash and entry.type == rr_hash:
+							target_rr = entry
+					
+					if not target_scdp:
+						raise Exception(f"Could not find SkinCharacterDataProperties in BIN for Skin{target_skin_idx}")
+					
+					# Generate new hash values for target skin
+					# Replace character name in path if needed (for subfolders like shacoboxes)
+					if base_scdp_path:
+						# Replace skin index in the path string (case-insensitive)
+						target_scdp_path = base_scdp_path.replace(f'/skin{skin_idx}', f'/skin{target_skin_idx}')
+						target_scdp_path = target_scdp_path.replace(f'/Skin{skin_idx}', f'/Skin{target_skin_idx}')
+						# Also handle if the path uses lowercase/uppercase variations
+						target_scdp_path = target_scdp_path.replace(f'Skin{skin_idx}', f'Skin{target_skin_idx}')
+						# Replace character name in path for subfolders (e.g., "Shaco" -> "ShacoBoxes")
+						# Check if the current path has the base champion name and replace with actual folder name
+						# Match patterns like "Characters/Shaco/" or "characters/shaco/" and replace with folder name
+						target_scdp_path = re.sub(
+							rf'(?i)(characters?[/\\]){re.escape(champ)}([/\\])',
+							rf'\1{char_name}\2',
+							target_scdp_path
+						)
+						# Convert path to hex string hash (entry.hash is stored as hex string)
+						target_scdp_hash = pyRitoFile.bin.BINHasher.raw_to_hex(target_scdp_path.lower())
+					else:
+						# Fallback: construct from character folder name
+						target_scdp_path = f"characters/{char_name}/skins/skin{target_skin_idx}"
+						target_scdp_hash = pyRitoFile.bin.BINHasher.raw_to_hex(target_scdp_path.lower())
+					
+					# Same for ResourceResolver - path is like "Characters/Akali/Skins/Skin1/Resources"
+					if base_rr_path:
+						target_rr_path = base_rr_path.replace(f'/skin{skin_idx}', f'/skin{target_skin_idx}')
+						target_rr_path = target_rr_path.replace(f'/Skin{skin_idx}', f'/Skin{target_skin_idx}')
+						target_rr_path = target_rr_path.replace(f'Skin{skin_idx}', f'Skin{target_skin_idx}')
+						# Replace character name if needed
+						target_rr_path = re.sub(
+							rf'(?i)(characters?[/\\]){re.escape(champ)}([/\\])',
+							rf'\1{char_name}\2',
+							target_rr_path
+						)
+						target_rr_hash = pyRitoFile.bin.BINHasher.raw_to_hex(target_rr_path.lower())
+					else:
+						target_rr_hash = None
+					
+					# Update hash values in the fresh BIN copy
+					# Entry hashes are hex strings like "e67284f4"
+					target_scdp.hash = target_scdp_hash
+					if target_rr and target_rr_hash:
+						target_rr.hash = target_rr_hash
+						# Update mResourceResolver field to link to the new ResourceResolver
+						# mResourceResolver field stores LINK type, which is also a hex string
+						if target_mrr:
+							target_mrr.data = target_rr_hash
+					
+					# Write the modified BIN to target location
+					target_bin.write(str(target_skin_path))
+					copied_count += 1
+					print(f"[DEBUG] No Skin Lite [{char_name}]: Created Skin{target_skin_idx} at {target_skin_path}")
+					
+				except Exception as e:
+					print(f"[DEBUG] No Skin Lite [{char_name}]: Failed to create Skin{target_skin_idx}: {e}")
+					import traceback
+					traceback.print_exc()
+					continue
+			
+			total_copied_count += copied_count
+			print(f"[DEBUG] No Skin Lite [{char_name}]: Copied Skin{skin_idx} to {copied_count} other slots")
+		
+		WizardApp._HashStorage.free_all_hashes()
+		print(f"[DEBUG] No Skin Lite: Total copied to {total_copied_count} skin slots across {len(character_folders_to_process)} character folder(s)")
+		self._set_status(f"No Skin Lite: Copied Skin{skin_idx} to {total_copied_count} slots across {len(character_folders_to_process)} character folder(s)")
+	
 	def _repath_fresh(self, fresh_unpack: Path) -> bool:
 		# Load hashes before starting (from AppData, not bundled)
 		hashes_dir = self._hash_dir()
@@ -1305,6 +1887,7 @@ class WizardApp:
 		
 		self._set_status(f"Repaired {fixed} BIN(s); scanning for repath (champ={champ})...")
 		bum.scan()
+		
 		# Use champion name in the repathed folder name
 		output_dir = self._work_root() / f'repathed_{champ}'
 		# Store the repathed folder path for later use
@@ -1313,13 +1896,64 @@ class WizardApp:
 		try:
 			bum.bum(str(output_dir), ignore_missing=True, combine_linked=True)
 			
+			# Fix HUD paths in repathed BIN files (change .dds to .tex)
+			self._set_status("Fixing HUD paths in repathed BIN files...")
+			bin_fixed_count = 0
+			if output_dir.exists():
+				# Find all BIN files in the repathed output and fix HUD paths
+				for bin_file in output_dir.rglob("*.bin"):
+					try:
+						bin_fixed, changes = self._fix_hud_paths_in_bin(bin_file)
+						if bin_fixed:
+							bin_fixed_count += changes
+							print(f"[DEBUG] Fixed {changes} HUD path(s) in repathed BIN: {bin_file}")
+					except Exception as e:
+						print(f"[DEBUG] Error fixing repathed BIN {bin_file}: {e}")
+			
+			if bin_fixed_count > 0:
+				self._set_status(f"Fixed {bin_fixed_count} HUD path(s) in repathed BIN files")
+			
 			# Copy VO files separately with their original paths (no prefix, no hashing)
 			self._set_status("Copying VO files with original paths...")
 			vo_count = self._copy_vo_files_original(fresh_unpack, output_dir)
-			if vo_count > 0:
-				self._set_status(f"Repath done: {output_dir} ({vo_count} VO files copied)")
+			
+			# Copy HUD folder with prefix and convert DDS↔TEX
+			if self._mod_hud_folder:
+				self._set_status("Copying HUD folder with prefix and converting textures...")
+				prefix = getattr(self, '_used_prefix', 'bum')
+				
+				# Find the main BIN path to check expected format
+				main_bin_path = None
+				if selected_unifys:
+					for u in selected_unifys:
+						bin_path = bum.source_files.get(u, (None, None))[0]
+						if not bin_path:
+							cand = fresh_unpack / Path(u)
+							bin_path = str(cand) if cand.exists() else None
+						if bin_path and str(bin_path).lower().endswith('.bin'):
+							bin_path_normalized = str(bin_path).replace('\\', '/')
+							if f"data/characters/{champ}/" in bin_path_normalized:
+								main_bin_path = Path(bin_path)
+								break
+				
+				hud_copied, hud_converted = self._copy_hud_files_with_prefix(
+					self._mod_hud_folder, output_dir, prefix, champ, main_bin_path
+				)
+				if hud_copied > 0:
+					status_msg = f"HUD: {hud_copied} files"
+					if hud_converted > 0:
+						status_msg += f", {hud_converted} converted"
+					self._set_status(f"Repath done: {output_dir} ({vo_count} VO files, {status_msg})")
+				else:
+					if vo_count > 0:
+						self._set_status(f"Repath done: {output_dir} ({vo_count} VO files copied)")
+					else:
+						self._set_status(f"Repath done: {output_dir}")
 			else:
-				self._set_status(f"Repath done: {output_dir}")
+				if vo_count > 0:
+					self._set_status(f"Repath done: {output_dir} ({vo_count} VO files copied)")
+				else:
+					self._set_status(f"Repath done: {output_dir}")
 			
 			WizardApp._HashStorage.free_all_hashes()
 			return True
@@ -1431,8 +2065,12 @@ class WizardApp:
 			print(f"[DEBUG] Error detecting champion from folder: {e}")
 			return ""
 	
-	def _safe_cleanup_work_folder(self, work_root: Path):
-		"""Safely clean up specific leftover files/folders from previous runs"""
+	def _safe_cleanup_work_folder(self, work_root: Path, cleanup_repathed: bool = False):
+		"""Safely clean up specific leftover files/folders from previous runs
+		Args:
+			work_root: Working directory root
+			cleanup_repathed: If True, also delete repathed_* folders (only at start of new operation)
+		"""
 		try:
 			# Only remove specific known folders/files to avoid nuking everything
 			safe_to_remove = [
@@ -1445,14 +2083,51 @@ class WizardApp:
 				if item_path.exists() and item_path.is_dir():
 					shutil.rmtree(item_path, ignore_errors=True)
 			
-			# Remove any repathed_* folders (champion-named folders)
-			if work_root.exists():
-				for item in work_root.iterdir():
-					if item.is_dir() and item.name.startswith('repathed_'):
-						try:
-							shutil.rmtree(item, ignore_errors=True)
-						except Exception:
-							pass
+			# Only remove repathed_* folders if explicitly requested (at start of new operation)
+			# BUT preserve folders with special suffixes (fantome name suffixes added during bulk processing)
+			if cleanup_repathed:
+				if work_root.exists():
+					for item in work_root.iterdir():
+						if item.is_dir() and item.name.startswith('repathed_'):
+							# Get the suffix after "repathed_"
+							folder_suffix = item.name.replace('repathed_', '', 1)
+							
+							# Preserve folders with special suffixes (fantome names):
+							# - Contains dots (from fantome filenames like "MyMod_v1.2")
+							# - Ends with underscore + number (like "_1", "_2" from duplicate handling)
+							# - Has multiple underscores (suggests fantome name with underscores)
+							
+							# Delete only simple patterns: repathed_{champion}
+							# Champion names are typically single lowercase words or simple patterns
+							should_delete = True
+							
+							# Check for dots (fantome filenames often have dots)
+							if '.' in folder_suffix:
+								should_delete = False
+							# Check if ends with _number pattern (duplicate suffix)
+							elif '_' in folder_suffix:
+								parts = folder_suffix.split('_')
+								if len(parts) > 1 and parts[-1].isdigit():
+									# Ends with _number - preserve
+									should_delete = False
+								elif len(parts) > 2:
+									# Multiple underscores suggest fantome name - preserve
+									should_delete = False
+								# Single underscore might be champion name (like "miss_fortune") or fantome
+								# If the part after underscore is not a number and looks like a fantome name, preserve
+								elif len(parts) == 2 and not parts[1].isdigit():
+									# Could be champion name with underscore or fantome name
+									# Check if it looks like a fantome name (has uppercase, numbers, special chars)
+									second_part = parts[1]
+									if any(c.isupper() for c in second_part) or any(c.isdigit() for c in second_part):
+										# Looks like fantome name - preserve
+										should_delete = False
+							
+							if should_delete:
+								try:
+									shutil.rmtree(item, ignore_errors=True)
+								except Exception:
+									pass
 			
 			# Remove missing files reports from previous runs
 			missing_txt = work_root / 'missing_files.txt'
@@ -1490,9 +2165,9 @@ class WizardApp:
 			mod_folder_path = self.mod_folder_path.get().strip()
 			work_root = self._work_root()
 			
-			# Safe cleanup of previous run leftovers
+			# Safe cleanup of previous run leftovers (including repathed folders at start of new operation)
 			self._set_status("Cleaning up previous run files...")
-			self._safe_cleanup_work_folder(work_root)
+			self._safe_cleanup_work_folder(work_root, cleanup_repathed=True)
 			
 			mod_dir = work_root / 'mod_extract'
 			fresh_dir = work_root / 'fresh_extract'
@@ -1630,6 +2305,14 @@ class WizardApp:
 				self._set_status(f"Texture conversion skipped: {e}")
 				print(f"[DEBUG] Texture conversion error: {e}")
 			
+			# Store HUD folder from mod before overlay (so we can restore it after repathing)
+			try:
+				self._set_status("Storing mod HUD folder...")
+				self._store_mod_hud_folder(mod_unpack, champ)
+			except Exception as e:
+				self._set_status(f"HUD folder storage skipped: {e}")
+				print(f"[DEBUG] HUD folder storage error: {e}")
+			
 			# Overlay: copy mod extracted content over fresh extracted content (overwrite)
 			self._set_status("Overlaying mod over fresh (overwrite)...")
 			copied, skipped = self._overlay_copy(mod_unpack, fresh_unpack)
@@ -1656,6 +2339,363 @@ class WizardApp:
 				self._set_status(f"Finished with issues ({', '.join(missing)}). Files are ready for inspection. Proceed to Step 3 when ready.")
 		except Exception as e:
 			self._set_status(f"Error: {e}")
+
+	def _process_bulk_fantomes(self):
+		"""Process multiple fantome files in sequence - fully automatic with Skin0"""
+		try:
+			total_files = len(self.bulk_fantome_paths)
+			successful = 0
+			failed = []
+			
+			# Ensure Skin0 is set for bulk processing (required for No Skin Lite if enabled)
+			current_bin = self.main_bin_choice.get().strip()
+			if not current_bin or current_bin.lower() in ('skin0', 'base', '0'):
+				self.main_bin_choice.set("Skin0")
+			
+			# Clean up at the start of bulk processing (including old repathed folders)
+			work_root = self._work_root()
+			self._set_status("Cleaning up previous run files...")
+			self._safe_cleanup_work_folder(work_root, cleanup_repathed=True)
+			
+			# Determine skin choice message
+			skin_choice = self.main_bin_choice.get().strip()
+			self._set_status(f"🔄 BULK MODE: Starting automatic processing of {total_files} file(s) with {skin_choice}...")
+			
+			# Automatically mark steps as complete since we're processing everything automatically
+			self.step_completed[1] = True
+			self.step_completed[2] = True
+			
+			for idx, fantome_path in enumerate(self.bulk_fantome_paths, 1):
+				fantome_name = Path(fantome_path).name
+				self._set_status(f"[{idx}/{total_files}] Processing: {fantome_name}...")
+				
+				try:
+					# Temporarily set this fantome as the current one
+					original_fantome = self.fantome_path.get()
+					original_mod_folder = self.mod_folder_path.get()
+					original_member_path = getattr(self, '_fantome_member_path', None)
+					original_hud_folder = getattr(self, '_mod_hud_folder', None)
+					
+					self.fantome_path.set(fantome_path)
+					self.mod_folder_path.set("")  # Clear mod folder for fantome mode
+					self._fantome_member_path = None  # Reset for this file
+					self._mod_hud_folder = None  # Reset for this file
+					
+					# Step 1: Detect and extract
+					champs_dir = Path(self.champions_dir.get().strip())
+					# work_root already set above at start of bulk processing
+					
+					# Clean up intermediate folders for this iteration (don't delete repathed folders - keep them for inspection)
+					self._safe_cleanup_work_folder(work_root, cleanup_repathed=False)
+					
+					mod_dir = work_root / 'mod_extract'
+					fresh_dir = work_root / 'fresh_extract'
+					mod_dir.mkdir(parents=True, exist_ok=True)
+					fresh_dir.mkdir(parents=True, exist_ok=True)
+					
+					hashes_dir = self._hash_dir()
+					fantome = Path(fantome_path)
+					
+					self._set_status(f"[{idx}/{total_files}] Detecting champion in {fantome_name}...")
+					member = self._detect_wad_member_in_fantome(fantome, champs_dir)
+					if not member:
+						self._set_status(f"[{idx}/{total_files}] ⚠ Skipped {fantome_name}: No champion WAD found")
+						failed.append((fantome_name, "No champion WAD found"))
+						continue
+					
+					self._fantome_member_path = member
+					wad_name = Path(member).name
+					self._champion = wad_name.split('.')[0].lower()
+					
+					# Extract mod wad
+					self._set_status(f"[{idx}/{total_files}] Extracting mod WAD from {fantome_name}...")
+					mod_wad_path = mod_dir / wad_name
+					self._extract_file_from_fantome(fantome, member, mod_wad_path)
+					
+					# Extract hashes
+					try:
+						temp_unpack = mod_dir / 'temp_for_hashes'
+						temp_unpack.mkdir(parents=True, exist_ok=True)
+						temp_ok = self._try_extract_wad(mod_wad_path, temp_unpack, hashes_dir)
+						if temp_ok:
+							self._extract_hashes_from_folder(temp_unpack, hashes_dir)
+							shutil.rmtree(temp_unpack, ignore_errors=True)
+					except Exception:
+						pass
+					
+					# Find fresh wad
+					fresh_wad_file = self._find_fresh_wad(champs_dir, wad_name)
+					if not fresh_wad_file or not fresh_wad_file.exists():
+						self._set_status(f"[{idx}/{total_files}] ⚠ Skipped {fantome_name}: Fresh WAD not found")
+						failed.append((fantome_name, "Fresh WAD not found"))
+						continue
+					
+					fresh_wad_copy = fresh_dir / wad_name
+					shutil.copy2(fresh_wad_file, fresh_wad_copy)
+					
+					# Unpack
+					self._set_status(f"[{idx}/{total_files}] Unpacking WADs...")
+					mod_unpack = mod_dir / 'unpacked'
+					ok_mod = self._try_extract_wad(mod_wad_path, mod_unpack, hashes_dir)
+					fresh_unpack = fresh_dir / 'unpacked'
+					ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
+					
+					if not ok_mod or not ok_fresh:
+						self._set_status(f"[{idx}/{total_files}] ⚠ Skipped {fantome_name}: Unpacking failed")
+						failed.append((fantome_name, "Unpacking failed"))
+						continue
+					
+					# Convert textures
+					try:
+						self._convert_all_tex_to_dds(fresh_unpack)
+					except Exception:
+						pass
+					
+					champ = getattr(self, '_champion', '').lower()
+					try:
+						self._convert_dds_tex_in_subfolders(fresh_unpack, mod_unpack, champ)
+					except Exception:
+						pass
+					
+					# Store HUD folder
+					try:
+						self._store_mod_hud_folder(mod_unpack, champ)
+					except Exception:
+						pass
+					
+					# Overlay
+					self._set_status(f"[{idx}/{total_files}] Overlaying mod over fresh...")
+					self._overlay_copy(mod_unpack, fresh_unpack)
+					
+					# Step 2: Repath
+					self._set_status(f"[{idx}/{total_files}] Repathing {fantome_name}...")
+					repath_ok = self._repath_fresh(fresh_unpack)
+					if not repath_ok:
+						self._set_status(f"[{idx}/{total_files}] ⚠ Skipped {fantome_name}: Repath failed")
+						failed.append((fantome_name, "Repath failed"))
+						continue
+					
+					# Step 3: Find and rename repathed directory to keep it unique
+					champ = getattr(self, '_champion', '').lower()
+					original_repathed_dir = work_root / f'repathed_{champ}'
+					
+					if not original_repathed_dir.exists():
+						self._set_status(f"[{idx}/{total_files}] ⚠ Skipped {fantome_name}: Repathed directory not found")
+						failed.append((fantome_name, "Repathed directory not found"))
+						continue
+					
+					# Rename repathed folder to unique name (include fantome name for easy identification)
+					fantome_stem = Path(fantome_path).stem  # Get filename without extension
+					unique_repathed_dir = work_root / f'repathed_{fantome_stem}'
+					
+					# If folder already exists, add index suffix
+					counter = 1
+					while unique_repathed_dir.exists():
+						unique_repathed_dir = work_root / f'repathed_{fantome_stem}_{counter}'
+						counter += 1
+					
+					try:
+						original_repathed_dir.rename(unique_repathed_dir)
+						self._set_status(f"[{idx}/{total_files}] Renamed repathed folder to: {unique_repathed_dir.name}")
+					except Exception as e:
+						self._set_status(f"[{idx}/{total_files}] ⚠ Warning: Could not rename repathed folder: {e}")
+						unique_repathed_dir = original_repathed_dir  # Use original if rename fails
+					
+					repathed_dir = unique_repathed_dir
+					
+					# Store repathed_dir for missing files check
+					self._repathed_dir = repathed_dir
+					
+					# Check for missing files and create placeholders (full check, not just counting)
+					self._set_status(f"[{idx}/{total_files}] Checking for missing texture files...")
+					missing_count = 0
+					try:
+						# Run full missing files check and create placeholders
+						result = self._pyntex_check_dir(repathed_dir)
+						
+						# Collect missing textures
+						missing_textures = []
+						for key, bin_results in result.items():
+							if key == 'junk_files':
+								continue
+							if isinstance(bin_results, list):
+								for entry in bin_results:
+									if isinstance(entry, dict):
+										missing_in_entry = entry.get('missing_files', [])
+										for missing_file in missing_in_entry:
+											if missing_file.lower().endswith(('.dds', '.tex')):
+												if missing_file not in missing_textures:
+													missing_textures.append(missing_file)
+						
+						missing_count = len(missing_textures)
+						
+						# Create placeholders for missing textures
+						if missing_count > 0:
+							self._set_status(f"[{idx}/{total_files}] Found {missing_count} missing textures. Creating placeholders...")
+							self._create_placeholder_textures(repathed_dir, missing_textures)
+							self._set_status(f"[{idx}/{total_files}] Created {missing_count} placeholder textures.")
+						else:
+							self._set_status(f"[{idx}/{total_files}] ✓ No missing texture files found!")
+					except Exception as e:
+						self._set_status(f"[{idx}/{total_files}] ⚠ Warning: Missing files check failed: {e}")
+						import traceback
+						traceback.print_exc()
+					
+					# Apply No Skin Lite if enabled (ONLY works with Skin0/Base to prevent skin hacking)
+					if self.no_skin_lite_enabled.get():
+						desired_raw = (self.main_bin_choice.get() or '').strip()
+						desired = desired_raw.lower()
+						if desired in ('base', 'skin0', '0'):
+							self._set_status(f"[{idx}/{total_files}] Applying No Skin Lite...")
+							try:
+								self._apply_no_skin_lite_to_wad(repathed_dir)
+								self._set_status(f"[{idx}/{total_files}] No Skin Lite applied successfully!")
+							except Exception as e:
+								self._set_status(f"[{idx}/{total_files}] ⚠ No Skin Lite failed: {e}")
+								import traceback
+								traceback.print_exc()
+						else:
+							self._set_status(f"[{idx}/{total_files}] No Skin Lite skipped (only works with Base/Skin0, not Skin1+ to prevent skin hacking)")
+					
+					# Create final fantome
+					self._set_status(f"[{idx}/{total_files}] Creating final fantome for {fantome_name}...")
+					fantome_created = self._create_final_fantome_bulk(repathed_dir, missing_count, fantome)
+					
+					if fantome_created:
+						successful += 1
+						final_fantome_name = Path(fantome_path).stem + "_repathed" + Path(fantome_path).suffix
+						self._set_status(f"[{idx}/{total_files}] ✓ Completed {fantome_name} → {final_fantome_name}")
+					else:
+						self._set_status(f"[{idx}/{total_files}] ✗ Failed to create fantome for {fantome_name}")
+						failed.append((fantome_name, "Fantome creation failed"))
+					
+					# Clean up intermediate files for this iteration (keep repathed folder for inspection)
+					try:
+						if mod_dir.exists():
+							shutil.rmtree(mod_dir, ignore_errors=True)
+						if fresh_dir.exists():
+							shutil.rmtree(fresh_dir, ignore_errors=True)
+					except Exception:
+						pass
+					
+				except Exception as e:
+					self._set_status(f"[{idx}/{total_files}] ✗ Error processing {fantome_name}: {e}")
+					failed.append((fantome_name, str(e)))
+					import traceback
+					traceback.print_exc()
+			
+			# Final summary
+			if successful == total_files:
+				self._set_status(f"✓✓✓ BULK PROCESSING COMPLETE! All {total_files} file(s) processed successfully with Skin0.")
+			else:
+				summary = f"✓✓✓ BULK PROCESSING COMPLETE: {successful}/{total_files} successful"
+				if failed:
+					summary += f"\nFailed: {', '.join([f[0] for f in failed])}"
+				self._set_status(summary)
+			
+			# Mark all steps as complete (bulk mode processes everything automatically)
+			self.step_completed[1] = True
+			self.step_completed[2] = True
+			self.step_completed[3] = True
+			
+			# Auto-advance to final step to show completion
+			self.root.after(0, lambda: self._show_step(len(self.steps) - 1))
+			self.root.after(0, self._update_nav)
+			
+		except Exception as e:
+			self._set_status(f"Bulk processing error: {e}")
+			import traceback
+			traceback.print_exc()
+	
+	def _create_final_fantome_bulk(self, repathed_dir: Path, missing_count: int, fantome_path: Path) -> bool:
+		"""Create final fantome for bulk processing (uses provided fantome_path instead of self.fantome_path)
+		Returns True if successful, False otherwise"""
+		try:
+			work_root = self._work_root()
+			
+			# Determine champion name and wad name
+			champ = getattr(self, '_champion', '').lower()
+			if not champ:
+				self._set_status("Error: Champion name unknown")
+				return False
+			wad_name = f"{champ}.wad.client"
+			
+			# Pack repathed_dir -> new wad
+			final_wad_path = work_root / f"final_{wad_name}"
+			self._set_status(f"Packing WAD from {repathed_dir.name}...")
+			self._pack_wad(repathed_dir, final_wad_path)
+			
+			if not final_wad_path.exists():
+				self._set_status("Error: WAD packing failed")
+				return False
+			
+			# FANTOME MODE: Copy original fantome and replace the champion WAD
+			member = getattr(self, '_fantome_member_path', None)
+			if not member:
+				self._set_status("Error: Original WAD member path unknown")
+				if final_wad_path.exists():
+					os.remove(final_wad_path)
+				return False
+			
+			# Build final fantome
+			fantome = Path(fantome_path)
+			final_fantome = fantome.with_name(f"{fantome.stem}_repathed{fantome.suffix}")
+			
+			self._set_status(f"Creating fantome: {final_fantome.name}...")
+			import zipfile as _zip
+			with _zip.ZipFile(fantome, 'r') as zin, _zip.ZipFile(final_fantome, 'w', compression=_zip.ZIP_DEFLATED) as zout:
+				has_info_json = False
+				for item in zin.infolist():
+					data = zin.read(item.filename)
+					item_path_normalized = item.filename.replace('\\', '/').lower()
+					member_path_normalized = member.replace('\\', '/').lower()
+					
+					if item_path_normalized in ['meta/info.json', 'info.json']:
+						has_info_json = True
+						info_json = self._update_info_json(data.decode('utf-8'))
+						zout.writestr(item.filename, info_json)
+					elif item_path_normalized == member_path_normalized:
+						# Replace with new repathed WAD
+						with open(final_wad_path, 'rb') as f:
+							data = f.read()
+						zout.writestr(item.filename, data)
+					else:
+						zout.writestr(item, data)
+				
+				if not has_info_json:
+					info_json = self._create_info_json(champ, is_new=False)
+					zout.writestr("META/info.json", info_json)
+			
+			# Cleanup final wad (temporary file)
+			if final_wad_path.exists():
+				os.remove(final_wad_path)
+			
+			if final_fantome.exists():
+				self._set_status(f"✓ Fantome created: {final_fantome.name}")
+				return True
+			else:
+				self._set_status("Error: Fantome file was not created")
+				return False
+			
+		except Exception as e:
+			self._set_status(f"Error creating final fantome: {e}")
+			print(f"Error creating final fantome: {e}")
+			import traceback
+			traceback.print_exc()
+			return False
+	
+	def _check_missing_files_simple(self, repathed_dir: Path) -> int:
+		"""Quick check for missing files - returns count"""
+		missing_count = 0
+		try:
+			# Simple check: count placeholder textures
+			for root, dirs, files in os.walk(repathed_dir):
+				for f in files:
+					if f.endswith('_placeholder.dds'):
+						missing_count += 1
+		except Exception:
+			pass
+		return missing_count
 
 	def _tex2dds(self, tex_path: Path, dds_path: Path) -> None:
 		# Minimal port of LtMAO.Ritoddstex.tex2dds using pyRitoFile
@@ -2083,6 +3123,7 @@ class WizardApp:
 			if not fresh_unpack.exists():
 				self._set_status("Nothing to repath. Please run extraction first.")
 				return
+			
 			self._set_status("Repathing merged content...")
 			repath_ok = self._repath_fresh(fresh_unpack)
 			if repath_ok:
@@ -2729,6 +3770,25 @@ class WizardApp:
 			else:
 				self._set_status("✓ No missing texture files found!")
 				print("[DEBUG] No missing textures found!")
+			
+			# Apply No Skin Lite if enabled (ONLY works with Skin0/Base to prevent skin hacking)
+			if self.no_skin_lite_enabled.get():
+				# Check if main BIN is Base/Skin0 (required for No Skin Lite)
+				desired_raw = (self.main_bin_choice.get() or '').strip()
+				desired = desired_raw.lower()
+				if desired in ('base', 'skin0', '0'):
+					self._set_status("Applying No Skin Lite...")
+					try:
+						self._apply_no_skin_lite_to_wad(repathed_dir)
+						self._set_status("No Skin Lite applied successfully!")
+					except Exception as e:
+						self._set_status(f"No Skin Lite failed: {e}")
+						print(f"[DEBUG] No Skin Lite error: {e}")
+						import traceback
+						traceback.print_exc()
+				else:
+					self._set_status("No Skin Lite skipped (only works with Base/Skin0, not Skin1+ to prevent skin hacking)")
+					print("[DEBUG] No Skin Lite skipped: Skin1+ selected (prevents skin hacking)")
 			
 			# Automatically package final fantome
 			self._set_status("Packaging final .fantome with all fixes...")
