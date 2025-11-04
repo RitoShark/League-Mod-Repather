@@ -1088,55 +1088,33 @@ class WizardApp:
 	
 	def _copy_hud_files_with_prefix(self, hud_source: Path, dst_dir: Path, prefix: str, champion: str, bin_path: Path = None) -> tuple[int, int]:
 		"""
-		Copy HUD folder to repathed output with correct prefix and convert DDS↔TEX.
-		Special handling: icons2d folder is copied WITHOUT prefix (like VO files).
-		Checks BIN file to determine expected format and converts accordingly.
+		Copy ONLY the icons2d folder from HUD to repathed output WITHOUT prefix (like VO files).
+		Other HUD files are already copied by bum.bum() with prefix.
 		Returns (copied_count, converted_count)
 		"""
 		if not hud_source or not hud_source.exists():
 			return (0, 0)
 		
 		champ = champion.lower() if champion else ''
-		if not champ or not prefix:
+		if not champ:
 			return (0, 0)
 		
-		# BIN file should already be fixed before repathing, but we always expect .tex format
-		expected_format = 'tex'
+		# Only copy icons2d folder - destination WITHOUT prefix: assets/characters/{champion}/hud/icons2d
+		icons2d_source = hud_source / 'icons2d'
+		if not icons2d_source.exists() or not icons2d_source.is_dir():
+			return (0, 0)
 		
-		# Destination path with prefix: assets/{prefix}/characters/{champion}/hud
-		dst_hud_prefixed = dst_dir / 'assets' / prefix / 'characters' / champ / 'hud'
-		# Destination path without prefix for icons2d: assets/characters/{champion}/hud
 		dst_hud_no_prefix = dst_dir / 'assets' / 'characters' / champ / 'hud'
+		dst_icons2d = dst_hud_no_prefix / 'icons2d'
 		
 		copied = 0
 		converted = 0
 		
-		# Copy all files and convert DDS↔TEX as needed
-		for root, _dirs, files in os.walk(hud_source):
+		# Copy only files in icons2d folder (and subfolders)
+		for root, _dirs, files in os.walk(icons2d_source):
 			root_p = Path(root)
-			rel = root_p.relative_to(hud_source)
-			
-			# Check if we're in the icons2d folder (should be without prefix)
-			# rel will be like: "." (root), "icons2d", "icons2d/subfolder", etc.
-			is_icons2d = False
-			if rel != Path('.'):
-				rel_parts = rel.parts
-				# Check if icons2d is in the path
-				if rel_parts and rel_parts[0].lower() == 'icons2d':
-					is_icons2d = True
-				# Also check if any part of the path contains icons2d
-				if not is_icons2d:
-					for part in rel_parts:
-						if part.lower() == 'icons2d':
-							is_icons2d = True
-							break
-			
-			# Choose destination based on whether it's icons2d
-			if is_icons2d:
-				target_dir = dst_hud_no_prefix / rel
-			else:
-				target_dir = dst_hud_prefixed / rel
-			
+			rel = root_p.relative_to(icons2d_source)
+			target_dir = dst_icons2d / rel
 			target_dir.mkdir(parents=True, exist_ok=True)
 			
 			for f in files:
@@ -1157,26 +1135,22 @@ class WizardApp:
 							try:
 								self._dds2tex(dst_dds, dst_tex)
 								converted += 1
-								location = "no-prefix" if is_icons2d else "prefixed"
-								print(f"[DEBUG] Converted HUD DDS→TEX ({location}): {src_file} -> {dst_tex}")
+								print(f"[DEBUG] Converted icons2d DDS→TEX: {src_file} -> {dst_tex}")
 							except Exception as e:
-								print(f"[DEBUG] Failed to convert HUD DDS→TEX {src_file}: {e}")
+								print(f"[DEBUG] Failed to convert icons2d DDS→TEX {src_file}: {e}")
 					except Exception as e:
-						print(f"[DEBUG] Failed to copy HUD file {src_file}: {e}")
+						print(f"[DEBUG] Failed to copy icons2d file {src_file}: {e}")
 				
 				elif name_lower.endswith('.tex'):
 					dst_tex = target_dir / f
-					dst_dds = target_dir / f"{src_file.stem}.dds"
 					
 					try:
-						# Copy TEX first
+						# Copy TEX file (no conversion needed)
 						shutil.copy2(src_file, dst_tex)
 						copied += 1
-						
-						# TEX files are already correct format, no conversion needed
-						pass
+						print(f"[DEBUG] Copied icons2d TEX: {src_file} -> {dst_tex}")
 					except Exception as e:
-						print(f"[DEBUG] Failed to copy HUD file {src_file}: {e}")
+						print(f"[DEBUG] Failed to copy icons2d file {src_file}: {e}")
 				
 				else:
 					# Other files: just copy
@@ -1184,12 +1158,74 @@ class WizardApp:
 					try:
 						shutil.copy2(src_file, dst_file)
 						copied += 1
-						location = "no-prefix" if is_icons2d else "prefixed"
-						print(f"[DEBUG] Copied HUD file ({location}): {src_file} -> {dst_file}")
+						print(f"[DEBUG] Copied icons2d file: {src_file} -> {dst_file}")
 					except Exception as e:
-						print(f"[DEBUG] Failed to copy HUD file {src_file}: {e}")
+						print(f"[DEBUG] Failed to copy icons2d file {src_file}: {e}")
 		
 		return (copied, converted)
+	
+	def _convert_hud_dds_to_tex(self, base_dir: Path, champion: str) -> int:
+		"""
+		Convert HUD DDS files to TEX in the base_dir BEFORE repathing.
+		This ensures bum.bum() finds .tex files that match what's in the BINs.
+		Returns count of converted files.
+		"""
+		converted_count = 0
+		champ = champion.lower() if champion else ''
+		
+		if not champ:
+			return 0
+		
+		# Search for HUD folders in both data and assets
+		hud_search_paths = [
+			base_dir / 'data' / 'characters' / champ / 'hud',
+			base_dir / 'assets' / 'characters' / champ / 'hud',
+		]
+		
+		# Also search in all character subfolders (for subfolders like shacoboxes)
+		characters_dir = base_dir / 'data' / 'characters'
+		if characters_dir.exists():
+			for char_folder in characters_dir.iterdir():
+				if char_folder.is_dir():
+					hud_search_paths.append(char_folder / 'hud')
+		
+		characters_dir_assets = base_dir / 'assets' / 'characters'
+		if characters_dir_assets.exists():
+			for char_folder in characters_dir_assets.iterdir():
+				if char_folder.is_dir():
+					hud_search_paths.append(char_folder / 'hud')
+		
+		# Find and convert all DDS files in HUD folders
+		for hud_dir in hud_search_paths:
+			if not hud_dir.exists():
+				continue
+			
+			# Walk through HUD folder and find all .dds files
+			for root, _dirs, files in os.walk(hud_dir):
+				for f in files:
+					if not f.lower().endswith('.dds'):
+						continue
+					
+					dds_path = Path(root) / f
+					tex_path = dds_path.with_suffix('.tex')
+					
+					# Always convert DDS to TEX, overwriting any existing TEX
+					# The mod's DDS files are the edited versions, so they take precedence
+					try:
+						# If TEX already exists, delete it first to ensure we get the converted version
+						if tex_path.exists():
+							print(f"[DEBUG] Overwriting existing TEX with converted DDS: {tex_path}")
+							tex_path.unlink()
+						
+						# Convert DDS to TEX
+						self._dds2tex(dds_path, tex_path)
+						converted_count += 1
+						print(f"[DEBUG] Converted HUD DDS→TEX (before repath): {dds_path} -> {tex_path}")
+					except Exception as e:
+						print(f"[DEBUG] Failed to convert HUD DDS→TEX {dds_path}: {e}")
+						continue
+		
+		return converted_count
 
 	# Hash storage (minimal version of LtMAO hash_helper.Storage)
 	class _HashStorage:
@@ -1885,6 +1921,33 @@ class WizardApp:
 				print(f"[DEBUG] Error merging CAC entries: {e}")
 				pass
 		
+		# Fix HUD paths in BIN files BEFORE scanning (change .dds to .tex in BIN paths)
+		# This ensures BINs reference .tex files that we'll convert from .dds
+		self._set_status("Fixing HUD paths in BIN files (changing .dds to .tex)...")
+		bin_fixed_count = 0
+		for u in selected_unifys:
+			try:
+				bin_path = bum.source_files.get(u, (None, None))[0]
+				if not bin_path:
+					cand = fresh_unpack / Path(u)
+					bin_path = str(cand) if cand.exists() else None
+				if bin_path and str(bin_path).lower().endswith('.bin'):
+					bin_path_normalized = str(bin_path).replace('\\', '/')
+					if main_champ_path in bin_path_normalized:
+						bin_fixed, changes = self._fix_hud_paths_in_bin(Path(bin_path))
+						if bin_fixed:
+							bin_fixed_count += changes
+							print(f"[DEBUG] Fixed {changes} HUD path(s) in BIN (before repath): {bin_path}")
+			except Exception as e:
+				print(f"[DEBUG] Error fixing HUD paths in BIN {bin_path}: {e}")
+				pass
+		
+		if bin_fixed_count > 0:
+			self._set_status(f"Fixed {bin_fixed_count} HUD path(s) in BIN files")
+		
+		# HUD DDS→TEX conversion already happened in mod_unpack before overlay
+		# No additional conversion needed here - overlay already copied mod's HUD TEX files to fresh_unpack
+		
 		self._set_status(f"Repaired {fixed} BIN(s); scanning for repath (champ={champ})...")
 		bum.scan()
 		
@@ -1917,27 +1980,26 @@ class WizardApp:
 			self._set_status("Copying VO files with original paths...")
 			vo_count = self._copy_vo_files_original(fresh_unpack, output_dir)
 			
-			# Copy HUD folder with prefix and convert DDS↔TEX
-			if self._mod_hud_folder:
-				self._set_status("Copying HUD folder with prefix and converting textures...")
+			# Copy ONLY icons2d folder from HUD (without prefix, like VO files)
+			# bum.bum() already copied all other HUD files with prefix from fresh_unpack
+			fresh_hud_folder = fresh_unpack / 'assets' / 'characters' / champ / 'hud'
+			if not fresh_hud_folder.exists():
+				# Try alternative path
+				assets_chars = fresh_unpack / 'assets' / 'characters'
+				if assets_chars.exists():
+					for char_dir in assets_chars.iterdir():
+						if char_dir.is_dir() and char_dir.name.lower() == champ:
+							alt_hud = char_dir / 'hud'
+							if alt_hud.exists():
+								fresh_hud_folder = alt_hud
+								break
+			
+			if fresh_hud_folder.exists():
+				self._set_status("Copying icons2d folder (without prefix)...")
 				prefix = getattr(self, '_used_prefix', 'bum')
 				
-				# Find the main BIN path to check expected format
-				main_bin_path = None
-				if selected_unifys:
-					for u in selected_unifys:
-						bin_path = bum.source_files.get(u, (None, None))[0]
-						if not bin_path:
-							cand = fresh_unpack / Path(u)
-							bin_path = str(cand) if cand.exists() else None
-						if bin_path and str(bin_path).lower().endswith('.bin'):
-							bin_path_normalized = str(bin_path).replace('\\', '/')
-							if f"data/characters/{champ}/" in bin_path_normalized:
-								main_bin_path = Path(bin_path)
-								break
-				
 				hud_copied, hud_converted = self._copy_hud_files_with_prefix(
-					self._mod_hud_folder, output_dir, prefix, champ, main_bin_path
+					fresh_hud_folder, output_dir, prefix, champ, None
 				)
 				if hud_copied > 0:
 					status_msg = f"HUD: {hud_copied} files"
@@ -2278,6 +2340,19 @@ class WizardApp:
 				self._set_status("Unpacking fresh .wad.client (best-effort)...")
 				fresh_unpack = fresh_dir / 'unpacked'
 				ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
+			
+			# Convert mod HUD DDS files to TEX FIRST (before any other conversions)
+			# This ensures mod's HUD files are in the correct format from the start
+			champ = getattr(self, '_champion', '').lower()
+			if champ:
+				try:
+					self._set_status("Converting mod HUD DDS files to TEX (before overlay)...")
+					hud_converted_count = self._convert_hud_dds_to_tex(mod_unpack, champ)
+					if hud_converted_count > 0:
+						self._set_status(f"Converted {hud_converted_count} mod HUD DDS file(s) to TEX")
+				except Exception as e:
+					self._set_status(f"Warning: Mod HUD DDS→TEX conversion failed: {e}")
+					print(f"[DEBUG] Mod HUD DDS→TEX conversion error: {e}")
 
 			# After fresh extract, run TEX→DDS conversion using LtMAO.Ritoddstex if available
 			try:
@@ -2513,8 +2588,9 @@ class WizardApp:
 						# Run full missing files check and create placeholders
 						result = self._pyntex_check_dir(repathed_dir)
 						
-						# Collect missing textures
+						# Collect missing textures (excluding HUD folder files)
 						missing_textures = []
+						missing_hud_count = 0
 						for key, bin_results in result.items():
 							if key == 'junk_files':
 								continue
@@ -2524,18 +2600,31 @@ class WizardApp:
 										missing_in_entry = entry.get('missing_files', [])
 										for missing_file in missing_in_entry:
 											if missing_file.lower().endswith(('.dds', '.tex')):
+												# Skip HUD folder files - don't create placeholders for them
+												if '/hud/' in missing_file.lower() or '\\hud\\' in missing_file.lower():
+													missing_hud_count += 1
+													continue
 												if missing_file not in missing_textures:
 													missing_textures.append(missing_file)
 						
 						missing_count = len(missing_textures)
 						
-						# Create placeholders for missing textures
+						# Create placeholders for missing textures (excluding HUD files)
 						if missing_count > 0:
-							self._set_status(f"[{idx}/{total_files}] Found {missing_count} missing textures. Creating placeholders...")
+							if missing_hud_count > 0:
+								self._set_status(f"[{idx}/{total_files}] Found {missing_count} missing textures (excluding {missing_hud_count} HUD files). Creating placeholders...")
+							else:
+								self._set_status(f"[{idx}/{total_files}] Found {missing_count} missing textures. Creating placeholders...")
 							self._create_placeholder_textures(repathed_dir, missing_textures)
-							self._set_status(f"[{idx}/{total_files}] Created {missing_count} placeholder textures.")
+							if missing_hud_count > 0:
+								self._set_status(f"[{idx}/{total_files}] Created {missing_count} placeholder textures (HUD files skipped).")
+							else:
+								self._set_status(f"[{idx}/{total_files}] Created {missing_count} placeholder textures.")
 						else:
-							self._set_status(f"[{idx}/{total_files}] ✓ No missing texture files found!")
+							if missing_hud_count > 0:
+								self._set_status(f"[{idx}/{total_files}] ✓ No missing texture files found (skipped {missing_hud_count} HUD files)!")
+							else:
+								self._set_status(f"[{idx}/{total_files}] ✓ No missing texture files found!")
 					except Exception as e:
 						self._set_status(f"[{idx}/{total_files}] ⚠ Warning: Missing files check failed: {e}")
 						import traceback
@@ -2770,6 +2859,11 @@ class WizardApp:
 		converted = 0
 		failed = 0
 		for dirpath, _dirnames, filenames in os.walk(root):
+			# Skip HUD folders - they should remain as TEX files
+			dirpath_lower = str(dirpath).lower()
+			if '/hud/' in dirpath_lower or '\\hud\\' in dirpath_lower:
+				continue
+			
 			for name in filenames:
 				if not name.lower().endswith('.tex'):
 					continue
@@ -3733,8 +3827,9 @@ class WizardApp:
 			# Run pyntex check
 			result = self._pyntex_check_dir(repathed_dir)
 			
-			# Collect all missing files (only .dds and .tex)
+			# Collect all missing files (only .dds and .tex, excluding HUD folder files)
 			missing_textures = []
+			missing_hud_count = 0
 			print(f"[DEBUG] Processing pyntex results, total keys: {len(result)}")
 			for key, bin_results in result.items():
 				# Skip the 'junk_files' key - it's a list of strings, not entry dicts
@@ -3749,6 +3844,11 @@ class WizardApp:
 							for missing_file in missing_in_entry:
 								# Only process .dds and .tex files
 								if missing_file.lower().endswith(('.dds', '.tex')):
+									# Skip HUD folder files - don't create placeholders for them
+									if '/hud/' in missing_file.lower() or '\\hud\\' in missing_file.lower():
+										missing_hud_count += 1
+										print(f"[DEBUG] Skipped HUD file: {missing_file}")
+										continue
 									if missing_file not in missing_textures:
 										missing_textures.append(missing_file)
 										print(f"[DEBUG] Added missing texture: {missing_file}")
@@ -3761,14 +3861,17 @@ class WizardApp:
 				json.dump(result, f, indent=4, ensure_ascii=False)
 			print(f"[DEBUG] Saved report to: {json_file}")
 			
-			# Create placeholders for missing textures
+			# Create placeholders for missing textures (excluding HUD files)
 			if len(missing_textures) > 0:
-				self._set_status(f"Found {len(missing_textures)} missing textures. Creating placeholders...")
-				print(f"[DEBUG] Calling _create_placeholder_textures with {len(missing_textures)} files")
+				self._set_status(f"Found {len(missing_textures)} missing textures (excluding {missing_hud_count} HUD files). Creating placeholders...")
+				print(f"[DEBUG] Calling _create_placeholder_textures with {len(missing_textures)} files (skipped {missing_hud_count} HUD files)")
 				self._create_placeholder_textures(repathed_dir, missing_textures)
-				self._set_status(f"Created {len(missing_textures)} placeholder textures.")
+				self._set_status(f"Created {len(missing_textures)} placeholder textures (HUD files skipped).")
 			else:
-				self._set_status("✓ No missing texture files found!")
+				if missing_hud_count > 0:
+					self._set_status(f"✓ No missing texture files found (skipped {missing_hud_count} HUD files)!")
+				else:
+					self._set_status("✓ No missing texture files found!")
 				print("[DEBUG] No missing textures found!")
 			
 			# Apply No Skin Lite if enabled (ONLY works with Skin0/Base to prevent skin hacking)
