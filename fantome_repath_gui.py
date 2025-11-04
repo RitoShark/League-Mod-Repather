@@ -1981,36 +1981,44 @@ class WizardApp:
 			vo_count = self._copy_vo_files_original(fresh_unpack, output_dir)
 			
 			# Copy ONLY icons2d folder from HUD (without prefix, like VO files)
+			# BUT only if the mod originally had an icons2d folder
 			# bum.bum() already copied all other HUD files with prefix from fresh_unpack
-			fresh_hud_folder = fresh_unpack / 'assets' / 'characters' / champ / 'hud'
-			if not fresh_hud_folder.exists():
-				# Try alternative path
-				assets_chars = fresh_unpack / 'assets' / 'characters'
-				if assets_chars.exists():
-					for char_dir in assets_chars.iterdir():
-						if char_dir.is_dir() and char_dir.name.lower() == champ:
-							alt_hud = char_dir / 'hud'
-							if alt_hud.exists():
-								fresh_hud_folder = alt_hud
-								break
+			hud_copied = 0
+			hud_converted = 0
+			if self._mod_hud_folder and self._mod_hud_folder.exists():
+				# Check if mod originally had icons2d folder
+				mod_icons2d = self._mod_hud_folder / 'icons2d'
+				if mod_icons2d.exists() and mod_icons2d.is_dir():
+					# Get the icons2d from fresh_unpack (which has mod's files after overlay)
+					fresh_hud_folder = fresh_unpack / 'assets' / 'characters' / champ / 'hud'
+					if not fresh_hud_folder.exists():
+						# Try alternative path
+						assets_chars = fresh_unpack / 'assets' / 'characters'
+						if assets_chars.exists():
+							for char_dir in assets_chars.iterdir():
+								if char_dir.is_dir() and char_dir.name.lower() == champ:
+									alt_hud = char_dir / 'hud'
+									if alt_hud.exists():
+										fresh_hud_folder = alt_hud
+										break
+					
+					if fresh_hud_folder.exists():
+						self._set_status("Copying icons2d folder (without prefix)...")
+						prefix = getattr(self, '_used_prefix', 'bum')
+						
+						hud_copied, hud_converted = self._copy_hud_files_with_prefix(
+							fresh_hud_folder, output_dir, prefix, champ, None
+						)
 			
-			if fresh_hud_folder.exists():
-				self._set_status("Copying icons2d folder (without prefix)...")
-				prefix = getattr(self, '_used_prefix', 'bum')
-				
-				hud_copied, hud_converted = self._copy_hud_files_with_prefix(
-					fresh_hud_folder, output_dir, prefix, champ, None
-				)
-				if hud_copied > 0:
-					status_msg = f"HUD: {hud_copied} files"
-					if hud_converted > 0:
-						status_msg += f", {hud_converted} converted"
+			# Status message
+			if hud_copied > 0:
+				status_msg = f"HUD: {hud_copied} files"
+				if hud_converted > 0:
+					status_msg += f", {hud_converted} converted"
+				if vo_count > 0:
 					self._set_status(f"Repath done: {output_dir} ({vo_count} VO files, {status_msg})")
 				else:
-					if vo_count > 0:
-						self._set_status(f"Repath done: {output_dir} ({vo_count} VO files copied)")
-					else:
-						self._set_status(f"Repath done: {output_dir}")
+					self._set_status(f"Repath done: {output_dir} ({status_msg})")
 			else:
 				if vo_count > 0:
 					self._set_status(f"Repath done: {output_dir} ({vo_count} VO files copied)")
