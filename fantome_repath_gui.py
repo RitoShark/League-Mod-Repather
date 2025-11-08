@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import random
 import string
+import re
 
 # Add project root to path for pyRitoFile
 # Handle both development and PyInstaller bundled mode
@@ -52,6 +53,7 @@ class WizardApp:
 		self.hash_status = tk.StringVar(value="Checking hashes...")
 		self.custom_prefix = tk.StringVar()  # Custom prefix for repathing
 		self.no_skin_lite_enabled = tk.BooleanVar(value=False)  # No Skin Lite checkbox
+		self.merge_linked_bins_enabled = tk.BooleanVar(value=True)  # Merge Linked BINs checkbox (enabled by default)
 		self.bulk_fantome_paths = []  # List of fantome paths for bulk processing
 
 		# internal: store full member path inside .fantome
@@ -63,8 +65,8 @@ class WizardApp:
 		self._bulk_total_count = 0
 		self._current_fantome_index = 0  # Current fantome being processed in bulk mode
 		
-		# Step completion tracking
-		self.step_completed = [False, False, False, False]  # Track if each step is completed
+		# Step completion tracking (5 steps now: 0, 1, 2, 3, 4)
+		self.step_completed = [False, False, False, False, False]  # Track if each step is completed
 
 		self.temp_dir = os.path.join(tempfile.gettempdir(), "FrogTools", "fantome_repath")
 		os.makedirs(self.temp_dir, exist_ok=True)
@@ -144,6 +146,28 @@ class WizardApp:
 			"• Ensuring all skins show the base appearance"
 		)
 		messagebox.showinfo("No Skin Lite Info", info_text)
+	
+	def _show_merge_linked_bins_info(self):
+		"""Show information about Merge Linked BINs feature"""
+		info_text = (
+			"Merge Linked BINs Feature\n\n"
+			"When enabled, this will:\n"
+			"• Extract linked BIN paths from fresh (unmodified) game files\n"
+			"• Add those linked BIN paths to your mod's BIN file\n"
+			"• The repather will automatically combine all linked BINs\n\n"
+			"🔧 This can potentially repair broken skins that cause crashes!\n\n"
+			"Common issues this fixes:\n"
+			"• Game crashes when using certain abilities (e.g., Yone E)\n"
+			"• Missing entries in linked BINs that cause errors\n"
+			"• Outdated mods that are missing newer linked BIN entries\n\n"
+			"How it works:\n"
+			"• Fresh game files contain updated linked BIN paths\n"
+			"• These paths are added to your mod BIN's links list\n"
+			"• The repather combines all linked BINs automatically\n"
+			"• Missing entries from newer game versions are included\n\n"
+			"💡 Recommended: Keep this enabled unless you have a specific reason to disable it."
+		)
+		messagebox.showinfo("Merge Linked BINs Info", info_text)
 
 	def _build_layout(self):
 		self.container = self._frame(self.root)
@@ -238,12 +262,31 @@ class WizardApp:
 		no_skin_hint = self._label(s1, text="💡 Copies Base/Skin0 to all other skin slots (1-99) - ONLY works with Base/Skin0 to prevent skin hacking", 
 		                            font=('Arial', 8), foreground='gray')
 		no_skin_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+		
+		# Merge Linked BINs checkbox with info icon
+		row5 = self._frame(s1)
+		row5.pack(fill=tk.X, padx=12, pady=6)
+		
+		if tb:
+			merge_linked_checkbox = tb.Checkbutton(row5, text="Merge Linked BINs", variable=self.merge_linked_bins_enabled)
+		else:
+			merge_linked_checkbox = tk.Checkbutton(row5, text="Merge Linked BINs", variable=self.merge_linked_bins_enabled)
+		merge_linked_checkbox.pack(side=tk.LEFT)
+		
+		# Info button with tooltip
+		merge_linked_info_btn = self._button(row5, text="ℹ️", width=3, command=self._show_merge_linked_bins_info)
+		merge_linked_info_btn.pack(side=tk.LEFT, padx=4)
+		
+		# Hint label for Merge Linked BINs
+		merge_linked_hint = self._label(s1, text="💡 Adds linked BIN paths from fresh game files to mod BIN - can repair broken skins that cause crashes (e.g., Yone E)", 
+		                                 font=('Arial', 8), foreground='gray')
+		merge_linked_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 
 		self.steps.append(s1)
 
-		# Step 2: Detection & extraction placeholders
+		# Step 2: Quick Extract (automatic - populates BIN dropdown)
 		s2 = self._frame(self.container)
-		self._label(s2, text="Step 2 — Detect champion wad and extract").pack(anchor=tk.W, padx=12, pady=(12, 6))
+		self._label(s2, text="Step 2 — Quick Extract (Detecting available BINs)").pack(anchor=tk.W, padx=12, pady=(12, 6))
 		self._label(s2, text="Detected wad:").pack(anchor=tk.W, padx=12, pady=(0, 4))
 		self._copyable_entry(s2, self.detected_wad_name, width=100).pack(fill=tk.X, padx=12, pady=(0, 8))
 		self._label(s2, text="Status:").pack(anchor=tk.W, padx=12, pady=(0, 4))
@@ -255,24 +298,28 @@ class WizardApp:
 		self._button(s2_btn_frame, text="📁 Open Work Folder", command=self._open_work_folder, width=20).pack()
 		self.steps.append(s2)
 
-		# Step 3: Overlay + BIN selection
+		# Step 3: Select Main BIN (user must choose before full extraction)
 		s3 = self._frame(self.container)
-		self._label(s3, text="Step 3 — Overlay mod onto fresh and select main BIN").pack(anchor=tk.W, padx=12, pady=(12, 6))
-		row3 = self._frame(s3)
-		row3.pack(fill=tk.X, padx=12, pady=6)
-		self._label(row3, text="Main BIN:").pack(side=tk.LEFT)
+		self._label(s3, text="Step 3 — Select Main BIN").pack(anchor=tk.W, padx=12, pady=(12, 6))
+		self._label(s3, text="Detected wad:").pack(anchor=tk.W, padx=12, pady=(0, 4))
+		self._copyable_entry(s3, self.detected_wad_name, width=100).pack(fill=tk.X, padx=12, pady=(0, 8))
+		
+		# BIN selection
+		bin_row = self._frame(s3)
+		bin_row.pack(fill=tk.X, padx=12, pady=6)
+		self._label(bin_row, text="Main BIN:").pack(side=tk.LEFT)
 		
 		# Use Combobox for BIN selection (dropdown + manual entry)
 		if tb:
-			self.bin_combo = tb.Combobox(row3, textvariable=self.main_bin_choice, width=30)
+			self.bin_combo = tb.Combobox(bin_row, textvariable=self.main_bin_choice, width=30)
 		else:
 			# Fallback for vanilla tkinter
 			from tkinter import ttk
-			self.bin_combo = ttk.Combobox(row3, textvariable=self.main_bin_choice, width=30)
+			self.bin_combo = ttk.Combobox(bin_row, textvariable=self.main_bin_choice, width=30)
 		self.bin_combo.pack(side=tk.LEFT, padx=8)
 		
 		# Hint label
-		bin_hint = self._label(s3, text="💡 Select from dropdown or type manually (e.g., Skin0, Skin5, Base)", 
+		bin_hint = self._label(s3, text="💡 Select from dropdown or type manually (e.g., Skin0, Skin5, Base). This will be used to extract and merge linked BINs.", 
 		                       font=('Arial', 8), foreground='gray')
 		bin_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 		
@@ -282,19 +329,31 @@ class WizardApp:
 		self._button(s3_btn_frame, text="📁 Open Work Folder", command=self._open_work_folder, width=20).pack()
 		self.steps.append(s3)
 
-		# Step 4: Repath & package (with automatic placeholder fixing)
+		# Step 4: Full extraction with selected BIN (extracts linked BINs for the selected BIN)
 		s4 = self._frame(self.container)
-		self._label(s4, text="Step 4 — Repath, Fix Missing Files & Package").pack(anchor=tk.W, padx=12, pady=(12, 6))
+		self._label(s4, text="Step 4 — Full Extraction with Linked BINs").pack(anchor=tk.W, padx=12, pady=(12, 6))
 		self._label(s4, text="Status:").pack(anchor=tk.W, padx=12, pady=(0, 4))
-		self._copyable_entry(s4, self.s2_status_text, width=100).pack(fill=tk.X, padx=12, pady=(0, 8))
-		# Buttons for Step 4
+		self.s4_status = self._copyable_entry(s4, self.s2_status_text, width=100)
+		self.s4_status.pack(fill=tk.X, padx=12, pady=(0, 8))
+		# Open work folder button
 		s4_btn_frame = self._frame(s4)
 		s4_btn_frame.pack(pady=8)
-		self._button(s4_btn_frame, text="📁 Open Work Folder", command=self._open_work_folder, width=20).pack(side=tk.LEFT, padx=4)
-		self.retry_btn = self._button(s4_btn_frame, text="🔄 Refresh / Retry", command=self._retry_step4, width=20)
+		self._button(s4_btn_frame, text="📁 Open Work Folder", command=self._open_work_folder, width=20).pack()
+		self.steps.append(s4)
+
+		# Step 5: Repath & package (with automatic placeholder fixing)
+		s5 = self._frame(self.container)
+		self._label(s5, text="Step 5 — Repath, Fix Missing Files & Package").pack(anchor=tk.W, padx=12, pady=(12, 6))
+		self._label(s5, text="Status:").pack(anchor=tk.W, padx=12, pady=(0, 4))
+		self._copyable_entry(s5, self.s2_status_text, width=100).pack(fill=tk.X, padx=12, pady=(0, 8))
+		# Buttons for Step 5
+		s5_btn_frame = self._frame(s5)
+		s5_btn_frame.pack(pady=8)
+		self._button(s5_btn_frame, text="📁 Open Work Folder", command=self._open_work_folder, width=20).pack(side=tk.LEFT, padx=4)
+		self.retry_btn = self._button(s5_btn_frame, text="🔄 Refresh / Retry", command=self._retry_step4, width=20)
 		self.retry_btn.pack(side=tk.LEFT, padx=4)
 		self.retry_btn.configure(state=tk.DISABLED)  # Disabled until process completes
-		self.steps.append(s4)
+		self.steps.append(s5)
 
 	def _show_step(self, idx: int):
 		for i, s in enumerate(self.steps):
@@ -317,8 +376,9 @@ class WizardApp:
 		else:
 			self.next_btn.configure(text="Next ▶")
 		
-		# Disable Next button if current step is not completed (except for step 0 which validates on click)
-		if self.current_step > 0 and not self.step_completed[self.current_step]:
+		# Disable Next button if current step is not completed
+		# Exception: step 0 (validates on click) and step 2 (BIN selection - validates on click)
+		if self.current_step > 0 and self.current_step != 2 and not self.step_completed[self.current_step]:
 			self.next_btn.configure(state=tk.DISABLED)
 		else:
 			self.next_btn.configure(state=tk.NORMAL)
@@ -341,21 +401,33 @@ class WizardApp:
 				t = threading.Thread(target=self._process_bulk_fantomes, daemon=True)
 				t.start()
 			else:
-				# Single file mode - normal flow
+				# Single file mode - do quick extraction to populate BIN dropdown
 				self._show_step(1)
-				t = threading.Thread(target=self._detect_and_extract, daemon=True)
+				t = threading.Thread(target=self._quick_extract_for_bin_selection, daemon=True)
 				t.start()
 		elif self.current_step == 1:
-			# Can't proceed from step 1 if extraction isn't complete
+			# Can't proceed from step 1 if quick extraction isn't complete
 			if not self.step_completed[1]:
-				messagebox.showwarning(APP_TITLE, "Please wait for extraction to complete before proceeding.")
+				messagebox.showwarning(APP_TITLE, "Please wait for quick extraction to complete before proceeding.")
 				return
-			# Mark step 2 as complete (user can now select main BIN)
-			self.step_completed[2] = True
-			self._show_step(self.current_step + 1)
+			# Step 1 -> Step 2: Show BIN selection
+			self._show_step(2)
 		elif self.current_step == 2:
-			# Step 3 -> Step 4: run repath now using selected main_bin_choice
+			# Step 2: Validate BIN selection before proceeding
+			if not self.main_bin_choice.get().strip():
+				messagebox.showwarning(APP_TITLE, "Please select a main BIN before proceeding.")
+				return
+			# Step 2 -> Step 3: Proceed to full extraction with selected BIN
 			self._show_step(3)
+			t = threading.Thread(target=self._detect_and_extract_with_bin, daemon=True)
+			t.start()
+		elif self.current_step == 3:
+			# Can't proceed from step 3 if full extraction isn't complete
+			if not self.step_completed[3]:
+				messagebox.showwarning(APP_TITLE, "Please wait for full extraction to complete before proceeding.")
+				return
+			# Step 3 -> Step 4: run repath now using selected main_bin_choice
+			self._show_step(4)
 			t = threading.Thread(target=self._run_repath_current, daemon=True)
 			t.start()
 		elif self.current_step < len(self.steps) - 1:
@@ -1164,10 +1236,11 @@ class WizardApp:
 		
 		return (copied, converted)
 	
-	def _convert_hud_dds_to_tex(self, base_dir: Path, champion: str) -> int:
+	def _convert_hud_dds_to_tex(self, base_dir: Path, champion: str, main_bin_path: Path = None) -> int:
 		"""
 		Convert HUD DDS files to TEX in the base_dir BEFORE repathing.
-		This ensures bum.bum() finds .tex files that match what's in the BINs.
+		Reads iconCircle and iconSquare paths from the main BIN file to know which files to convert.
+		This handles already-repathed paths (e.g., ASSETS/sungyone/Characters/Yone/HUD/Yone_Circle_0.tex).
 		Returns count of converted files.
 		"""
 		converted_count = 0
@@ -1176,55 +1249,394 @@ class WizardApp:
 		if not champ:
 			return 0
 		
-		# Search for HUD folders in both data and assets
-		hud_search_paths = [
-			base_dir / 'data' / 'characters' / champ / 'hud',
-			base_dir / 'assets' / 'characters' / champ / 'hud',
-		]
+		# Load hashes to find iconCircle and iconSquare fields
+		hashes_dir = self._hash_dir()
+		WizardApp._HashStorage.read_all_hashes(hashes_dir)
 		
-		# Also search in all character subfolders (for subfolders like shacoboxes)
-		characters_dir = base_dir / 'data' / 'characters'
-		if characters_dir.exists():
-			for char_folder in characters_dir.iterdir():
-				if char_folder.is_dir():
-					hud_search_paths.append(char_folder / 'hud')
+		# Create hash lookup
+		H = {}
+		for fname in ['hashes.binfields.txt', 'hashes.bintypes.txt']:
+			if fname in WizardApp._HashStorage.hashtables:
+				for hex_hash, raw_name in WizardApp._HashStorage.hashtables[fname].items():
+					H[raw_name] = hex_hash
+					if raw_name and raw_name[0].islower():
+						H[raw_name[0].upper() + raw_name[1:]] = hex_hash
 		
-		characters_dir_assets = base_dir / 'assets' / 'characters'
-		if characters_dir_assets.exists():
-			for char_folder in characters_dir_assets.iterdir():
-				if char_folder.is_dir():
-					hud_search_paths.append(char_folder / 'hud')
+		# Find the main BIN file (user selected)
+		bin_file = None
+		if main_bin_path and main_bin_path.exists():
+			bin_file = main_bin_path
+		else:
+			# Fallback: find BIN based on selected_bin choice
+			selected_bin = self.main_bin_choice.get().strip() if hasattr(self, 'main_bin_choice') else None
+			if selected_bin:
+				characters_dir = base_dir / 'data' / 'characters'
+				if characters_dir.exists():
+					champ_dir = characters_dir / champ
+					if champ_dir.exists():
+						skins_dir = champ_dir / 'skins'
+						if skins_dir.exists():
+							# Parse selected BIN (e.g., "Skin0", "Skin5", "Base")
+							selected_lower = selected_bin.lower().strip()
+							skin_idx = None
+							if selected_lower == 'base':
+								skin_idx = 0
+							else:
+								m = re.search(r"(skin)?\s*(\d+)", selected_lower)
+								if m:
+									skin_idx = int(m.group(2))
+							
+							if skin_idx is not None:
+								bin_file = skins_dir / f'skin{skin_idx}.bin'
+								if not bin_file.exists():
+									bin_file = None
 		
-		# Find and convert all DDS files in HUD folders
-		for hud_dir in hud_search_paths:
-			if not hud_dir.exists():
-				continue
+		# Collect HUD texture paths from the main BIN file (iconCircle, iconSquare, etc.)
+		hud_tex_paths = set()
+		
+		if bin_file and bin_file.exists():
+			try:
+				import pyRitoFile
+				BIN = pyRitoFile.bin.BIN
+				bin_obj = BIN().read(str(bin_file))
+				print(f"[DEBUG] Reading main BIN for HUD paths: {bin_file}")
+				
+				# Find SkinCharacterDataProperties entry
+				scdp_hash = H.get('SkinCharacterDataProperties')
+				icon_circle_hash = H.get('iconCircle')
+				icon_square_hash = H.get('iconSquare')
+				icon_avatar_hash = H.get('iconAvatar')
+				
+				# Debug: Check if hashes were found
+				if not scdp_hash:
+					print(f"[DEBUG] WARNING: SkinCharacterDataProperties hash not found in hash tables")
+				if not icon_circle_hash:
+					print(f"[DEBUG] WARNING: iconCircle hash not found in hash tables")
+				if not icon_square_hash:
+					print(f"[DEBUG] WARNING: iconSquare hash not found in hash tables")
+				if not icon_avatar_hash:
+					print(f"[DEBUG] WARNING: iconAvatar hash not found in hash tables")
+				
+				if scdp_hash and (icon_circle_hash or icon_square_hash or icon_avatar_hash):
+					found_scdp = False
+					for entry in bin_obj.entries:
+						if entry.type == scdp_hash:
+							found_scdp = True
+							print(f"[DEBUG] Found SkinCharacterDataProperties entry, checking {len(entry.data)} fields")
+							# Look for iconCircle, iconSquare, and iconAvatar fields
+							for field in entry.data:
+								# Check if this is iconCircle, iconSquare, or iconAvatar
+								is_icon_circle = icon_circle_hash and field.hash == icon_circle_hash
+								is_icon_square = icon_square_hash and field.hash == icon_square_hash
+								is_icon_avatar = icon_avatar_hash and field.hash == icon_avatar_hash
+								
+								if is_icon_circle or is_icon_square or is_icon_avatar:
+									if is_icon_circle:
+										field_name = "iconCircle"
+									elif is_icon_square:
+										field_name = "iconSquare"
+									else:
+										field_name = "iconAvatar"
+									print(f"[DEBUG] Found {field_name} field: type={field.type}, value_type={getattr(field, 'value_type', None)}, data={field.data}")
+									
+									# Handle OPTION[string] type
+									if field.type == pyRitoFile.bin.BINType.OPTION:
+										if hasattr(field, 'value_type') and field.value_type == pyRitoFile.bin.BINType.STRING:
+											if field.data is not None and isinstance(field.data, str):
+												# Path might already be repathed (e.g., ASSETS/sungyone/Characters/Yone/HUD/Yone_Circle_0.tex)
+												tex_path_str = field.data
+												if 'hud' in tex_path_str.lower() and ('.tex' in tex_path_str.lower() or '.dds' in tex_path_str.lower()):
+													hud_tex_paths.add(tex_path_str)
+													print(f"[DEBUG] Found HUD texture path in main BIN ({field_name}): {tex_path_str}")
+												else:
+													print(f"[DEBUG] {field_name} path found but doesn't look like HUD texture: {tex_path_str}")
+											else:
+												print(f"[DEBUG] {field_name} field data is None or not a string: {field.data}")
+										else:
+											print(f"[DEBUG] {field_name} is OPTION but value_type is not STRING: {getattr(field, 'value_type', None)}")
+									else:
+										# Try direct string access (in case it's not OPTION)
+										if hasattr(field, 'data') and field.data is not None:
+											if isinstance(field.data, str):
+												tex_path_str = field.data
+												if 'hud' in tex_path_str.lower() and ('.tex' in tex_path_str.lower() or '.dds' in tex_path_str.lower()):
+													hud_tex_paths.add(tex_path_str)
+													print(f"[DEBUG] Found HUD texture path in main BIN ({field_name}, non-OPTION): {tex_path_str}")
+							break
+					
+					if not found_scdp:
+						print(f"[DEBUG] WARNING: SkinCharacterDataProperties entry not found in BIN")
+				else:
+					print(f"[DEBUG] WARNING: Missing required hashes - scdp_hash={scdp_hash}, icon_circle_hash={icon_circle_hash}, icon_square_hash={icon_square_hash}")
+			except Exception as e:
+				print(f"[DEBUG] Error reading main BIN {bin_file} for HUD paths: {e}")
+				import traceback
+				traceback.print_exc()
+		else:
+			if not bin_file:
+				print(f"[DEBUG] WARNING: Main BIN file not found (bin_file is None)")
+			else:
+				print(f"[DEBUG] WARNING: Main BIN file does not exist: {bin_file}")
+		
+		# If no paths found in BIN, fall back to converting all DDS files in HUD folders
+		if not hud_tex_paths:
+			print(f"[DEBUG] No HUD texture paths found in BINs, falling back to converting all DDS files in HUD folders")
+			# Search for HUD folders in both data and assets
+			hud_search_paths = [
+				base_dir / 'data' / 'characters' / champ / 'hud',
+				base_dir / 'assets' / 'characters' / champ / 'hud',
+			]
 			
-			# Walk through HUD folder and find all .dds files
-			for root, _dirs, files in os.walk(hud_dir):
-				for f in files:
-					if not f.lower().endswith('.dds'):
-						continue
-					
-					dds_path = Path(root) / f
-					tex_path = dds_path.with_suffix('.tex')
-					
-					# Always convert DDS to TEX, overwriting any existing TEX
-					# The mod's DDS files are the edited versions, so they take precedence
-					try:
-						# If TEX already exists, delete it first to ensure we get the converted version
-						if tex_path.exists():
-							print(f"[DEBUG] Overwriting existing TEX with converted DDS: {tex_path}")
-							tex_path.unlink()
+			# Also search in all character subfolders
+			if characters_dir.exists():
+				for char_folder in characters_dir.iterdir():
+					if char_folder.is_dir():
+						hud_search_paths.append(char_folder / 'hud')
+			
+			characters_dir_assets = base_dir / 'assets' / 'characters'
+			if characters_dir_assets.exists():
+				for char_folder in characters_dir_assets.iterdir():
+					if char_folder.is_dir():
+						hud_search_paths.append(char_folder / 'hud')
+			
+			# Find and convert all DDS files in HUD folders
+			for hud_dir in hud_search_paths:
+				if not hud_dir.exists():
+					continue
+				
+				for root, _dirs, files in os.walk(hud_dir):
+					for f in files:
+						if not f.lower().endswith('.dds'):
+							continue
 						
-						# Convert DDS to TEX
-						self._dds2tex(dds_path, tex_path)
-						converted_count += 1
-						print(f"[DEBUG] Converted HUD DDS→TEX (before repath): {dds_path} -> {tex_path}")
-					except Exception as e:
-						print(f"[DEBUG] Failed to convert HUD DDS→TEX {dds_path}: {e}")
-						continue
+						dds_path = Path(root) / f
+						tex_path = dds_path.with_suffix('.tex')
+						
+						try:
+							if tex_path.exists():
+								tex_path.unlink()
+							self._dds2tex(dds_path, tex_path)
+							converted_count += 1
+							print(f"[DEBUG] Converted HUD DDS→TEX (before repath): {dds_path} -> {tex_path}")
+						except Exception as e:
+							print(f"[DEBUG] Failed to convert HUD DDS→TEX {dds_path}: {e}")
+							continue
+		else:
+			# Convert specific files referenced in BIN
+			print(f"[DEBUG] Processing {len(hud_tex_paths)} HUD texture paths from BIN")
+			for tex_path_str in hud_tex_paths:
+				try:
+					# Normalize path (handle already-repathed paths)
+					# Path might be: ASSETS/sungyone/Characters/Yone/HUD/Yone_Circle_0.tex
+					# Or: ASSETS/Characters/Yone/HUD/Yone_Circle_0.tex
+					path_normalized = tex_path_str.replace('\\', '/')
+					print(f"[DEBUG] Processing HUD path: {path_normalized}")
+					
+					# Extract the relative path after ASSETS/ or DATA/
+					# Handle already-repathed: ASSETS/sungyone/Characters/... -> Characters/...
+					# Handle normal: ASSETS/Characters/... -> Characters/...
+					path_lower = path_normalized.lower()
+					if 'assets' in path_lower:
+						parts = path_normalized.split('/')
+						assets_idx = None
+						for i, part in enumerate(parts):
+							if part.lower() == 'assets':
+								assets_idx = i
+								break
+						
+						if assets_idx is not None and assets_idx + 1 < len(parts):
+							# Check if next part is a prefix (not a standard folder like Characters, levels, etc.)
+							next_part = parts[assets_idx + 1].lower()
+							standard_folders = ['characters', 'levels', 'maps', 'data', 'sounds', 'uiautoatlas', 'ux']
+							
+							if next_part not in standard_folders:
+								# Already repathed - skip the prefix part
+								relative_path = '/'.join(parts[assets_idx + 2:])
+								prefix = parts[assets_idx + 1]
+								print(f"[DEBUG] Detected repathed path with prefix '{prefix}', relative_path: {relative_path}")
+							else:
+								# Normal path
+								relative_path = '/'.join(parts[assets_idx + 1:])
+								prefix = None
+								print(f"[DEBUG] Normal path (no prefix), relative_path: {relative_path}")
+							
+							# Try to find the file in base_dir
+							# The file structure is: base_dir/assets/[prefix]/characters/champ/hud/filename
+							# Build candidate paths with proper case handling
+							candidate_paths = []
+							
+							# First, try with the exact path structure from BIN (with prefix if present)
+							if prefix:
+								# Try: base_dir/assets/prefix/Characters/Yone/HUD/Yone_Circle_0.dds
+								candidate_paths.append(base_dir / 'assets' / prefix / relative_path)
+								candidate_paths.append(base_dir / 'ASSETS' / prefix / relative_path)
+								# Try lowercase version: base_dir/assets/prefix/characters/yone/hud/Yone_Circle_0.dds
+								relative_lower = relative_path.lower()
+								candidate_paths.append(base_dir / 'assets' / prefix / relative_lower)
+								candidate_paths.append(base_dir / 'ASSETS' / prefix / relative_lower)
+							else:
+								# No prefix, try normal paths
+								candidate_paths.append(base_dir / 'assets' / relative_path)
+								candidate_paths.append(base_dir / 'ASSETS' / relative_path)
+								relative_lower = relative_path.lower()
+								candidate_paths.append(base_dir / 'assets' / relative_lower)
+								candidate_paths.append(base_dir / 'ASSETS' / relative_lower)
+							
+							# Also try without the prefix in the path (in case files are stored without prefix)
+							relative_no_prefix = '/'.join(parts[assets_idx + 1:]) if prefix else relative_path
+							candidate_paths.append(base_dir / 'assets' / relative_no_prefix)
+							candidate_paths.append(base_dir / 'ASSETS' / relative_no_prefix)
+							relative_no_prefix_lower = relative_no_prefix.lower()
+							candidate_paths.append(base_dir / 'assets' / relative_no_prefix_lower)
+							candidate_paths.append(base_dir / 'ASSETS' / relative_no_prefix_lower)
+							
+							print(f"[DEBUG] Trying {len(candidate_paths)} candidate paths:")
+							for cp in candidate_paths:
+								print(f"[DEBUG]   - {cp} (exists: {cp.exists()})")
+							
+							# Find the actual file (might be .tex or .dds)
+							found_file = None
+							for candidate in candidate_paths:
+								# Try .tex first (if BIN already references .tex)
+								if candidate.exists():
+									found_file = candidate
+									print(f"[DEBUG] Found file (as .tex): {found_file}")
+									break
+								# Try .dds (need to convert)
+								dds_candidate = candidate.with_suffix('.dds')
+								if dds_candidate.exists():
+									found_file = dds_candidate
+									print(f"[DEBUG] Found file (as .dds): {found_file}")
+									break
+								# Try with lowercase filename
+								candidate_lower = candidate.parent / candidate.name.lower()
+								if candidate_lower.exists():
+									found_file = candidate_lower
+									print(f"[DEBUG] Found file (as .tex, lowercase filename): {found_file}")
+									break
+								dds_candidate_lower = candidate_lower.with_suffix('.dds')
+								if dds_candidate_lower.exists():
+									found_file = dds_candidate_lower
+									print(f"[DEBUG] Found file (as .dds, lowercase filename): {found_file}")
+									break
+							
+							if not found_file:
+								print(f"[DEBUG] WARNING: Could not find file for path: {path_normalized}")
+								print(f"[DEBUG] Base directory: {base_dir}")
+								print(f"[DEBUG] Base directory exists: {base_dir.exists()}")
+								# Try to find any file with the same name in the HUD folder
+								filename = Path(relative_path).name
+								print(f"[DEBUG] Searching for filename: {filename}")
+								
+								# Try multiple HUD folder locations
+								hud_folders_to_try = [
+									base_dir / 'assets' / 'characters' / champ / 'hud',
+									base_dir / 'ASSETS' / 'characters' / champ / 'hud',
+									base_dir / 'assets' / 'Characters' / champ.capitalize() / 'HUD',
+								]
+								if prefix:
+									hud_folders_to_try.extend([
+										base_dir / 'assets' / prefix / 'characters' / champ / 'hud',
+										base_dir / 'ASSETS' / prefix / 'characters' / champ / 'hud',
+										base_dir / 'assets' / prefix / 'Characters' / champ.capitalize() / 'HUD',
+									])
+								
+								for hud_folder in hud_folders_to_try:
+									if hud_folder.exists():
+										print(f"[DEBUG] Searching in HUD folder: {hud_folder}")
+										for f in hud_folder.rglob(filename):
+											print(f"[DEBUG] Found potential match in HUD folder: {f}")
+											found_file = f
+											break
+										if found_file:
+											break
+										# Also try case-insensitive search
+										for f in hud_folder.rglob('*'):
+											if f.name.lower() == filename.lower():
+												print(f"[DEBUG] Found case-insensitive match in HUD folder: {f}")
+												found_file = f
+												break
+										if found_file:
+											break
+							
+							if found_file and found_file.suffix.lower() == '.dds':
+								# Convert DDS to TEX
+								tex_output = found_file.with_suffix('.tex')
+								try:
+									if tex_output.exists():
+										tex_output.unlink()
+									self._dds2tex(found_file, tex_output)
+									converted_count += 1
+									print(f"[DEBUG] Converted HUD DDS→TEX (from BIN path): {found_file} -> {tex_output}")
+								except Exception as e:
+									print(f"[DEBUG] Failed to convert HUD DDS→TEX {found_file}: {e}")
+									import traceback
+									traceback.print_exc()
+							elif found_file and found_file.suffix.lower() == '.tex':
+								print(f"[DEBUG] HUD texture already exists as TEX: {found_file}")
+					# Also handle DATA/ paths
+					elif '/data/' in path_normalized.lower() or 'data' in path_lower:
+						parts = path_normalized.split('/')
+						data_idx = None
+						for i, part in enumerate(parts):
+							if part.lower() == 'data':
+								data_idx = i
+								break
+						
+						if data_idx is not None and data_idx + 1 < len(parts):
+							next_part = parts[data_idx + 1].lower()
+							standard_folders = ['characters', 'levels', 'maps']
+							
+							if next_part not in standard_folders:
+								relative_path = '/'.join(parts[data_idx + 2:])
+							else:
+								relative_path = '/'.join(parts[data_idx + 1:])
+							
+							candidate_paths = [
+								base_dir / 'data' / relative_path,
+								base_dir / 'DATA' / relative_path,
+							]
+							
+							if next_part not in standard_folders:
+								prefix = parts[data_idx + 1]
+								candidate_paths.extend([
+									base_dir / 'data' / prefix / relative_path,
+									base_dir / 'DATA' / prefix / relative_path,
+								])
+							
+							found_file = None
+							for candidate in candidate_paths:
+								if candidate.exists():
+									found_file = candidate
+									break
+								dds_candidate = candidate.with_suffix('.dds')
+								if dds_candidate.exists():
+									found_file = dds_candidate
+									break
+							
+							if found_file and found_file.suffix.lower() == '.dds':
+								tex_output = found_file.with_suffix('.tex')
+								try:
+									if tex_output.exists():
+										tex_output.unlink()
+									self._dds2tex(found_file, tex_output)
+									converted_count += 1
+									print(f"[DEBUG] Converted HUD DDS→TEX (from BIN path): {found_file} -> {tex_output}")
+								except Exception as e:
+									print(f"[DEBUG] Failed to convert HUD DDS→TEX {found_file}: {e}")
+									import traceback
+									traceback.print_exc()
+							elif found_file and found_file.suffix.lower() == '.tex':
+								print(f"[DEBUG] HUD texture already exists as TEX: {found_file}")
+					else:
+						print(f"[DEBUG] Path does not contain 'assets' or 'data', skipping: {path_normalized}")
+				except Exception as e:
+					print(f"[DEBUG] Exception processing HUD path {tex_path_str}: {e}")
+					import traceback
+					traceback.print_exc()
+					continue
 		
+		WizardApp._HashStorage.free_all_hashes()
 		return converted_count
 
 	# Hash storage (minimal version of LtMAO hash_helper.Storage)
@@ -1899,27 +2311,13 @@ class WizardApp:
 					bin_path_normalized = str(bin_path).replace('\\', '/')
 					if main_champ_path in bin_path_normalized:
 						self._set_status(f"Repairing BIN before repath: {os.path.basename(bin_path)}")
-						self._repair_bin_file(Path(bin_path))
+						self._repair_bin_file(Path(bin_path), fresh_unpack)
 						fixed += 1
 					else:
 						print(f"[DEBUG] Skipping repair for subfolder BIN: {bin_path}")
 			except Exception:
 				pass
-		self._set_status(f"Repaired {fixed} BIN(s); merging CAC entries...")
-		# Merge CAC entries from fresh folder into main skin bin
-		for u in selected_unifys:
-			try:
-				bin_path = bum.source_files.get(u, (None, None))[0]
-				if not bin_path:
-					cand = fresh_unpack / Path(u)
-					bin_path = str(cand) if cand.exists() else None
-				if bin_path and str(bin_path).lower().endswith('.bin'):
-					bin_path_normalized = str(bin_path).replace('\\', '/')
-					if main_champ_path in bin_path_normalized:
-						self._merge_cac_entries_from_fresh(Path(bin_path), fresh_unpack)
-			except Exception as e:
-				print(f"[DEBUG] Error merging CAC entries: {e}")
-				pass
+		self._set_status(f"Repaired {fixed} BIN(s)")
 		
 		# Fix HUD paths in BIN files BEFORE scanning (change .dds to .tex in BIN paths)
 		# This ensures BINs reference .tex files that we'll convert from .dds
@@ -2228,6 +2626,100 @@ class WizardApp:
 		except Exception:
 			pass  # Ignore cleanup errors, continue anyway
 	
+	def _quick_extract_for_bin_selection(self):
+		"""Quick extraction to populate BIN dropdown - only extracts mod to find available BINs"""
+		try:
+			champs_dir = Path(self.champions_dir.get().strip())
+			fantome_path = self.fantome_path.get().strip()
+			mod_folder_path = self.mod_folder_path.get().strip()
+			work_root = self._work_root()
+			
+			# Safe cleanup
+			self._set_status("Cleaning up previous run files...")
+			self._safe_cleanup_work_folder(work_root, cleanup_repathed=True)
+			
+			mod_dir = work_root / 'mod_extract'
+			mod_dir.mkdir(parents=True, exist_ok=True)
+			
+			hashes_dir = self._hash_dir()
+			
+			# Determine if using fantome or mod folder
+			if mod_folder_path:
+				# MOD FOLDER MODE: Copy folder directly
+				self._set_status("Using pre-extracted mod folder...")
+				mod_folder = Path(mod_folder_path)
+				
+				# Auto-detect champion name
+				champ_name = self._detect_champion_from_folder(mod_folder, champs_dir)
+				if not champ_name:
+					self._set_status("Aborted: Could not auto-detect champion from mod folder.")
+					messagebox.showerror(APP_TITLE, "Could not detect champion from mod folder structure.")
+					return
+				
+				self._champion = champ_name
+				self.detected_wad_name.set(f"Auto-detected: {champ_name}")
+				
+				# Copy mod folder to mod_extract/unpacked
+				mod_unpack = mod_dir / 'unpacked'
+				shutil.copytree(mod_folder, mod_unpack, dirs_exist_ok=True)
+			else:
+				# FANTOME MODE: Extract mod WAD
+				fantome = Path(fantome_path)
+				
+				self._set_status("Detecting champion .wad.client inside .fantome...")
+				member = self._detect_wad_member_in_fantome(fantome, champs_dir)
+				if not member:
+					self.detected_wad_name.set("No champion wad found in .fantome")
+					self._set_status("Aborted: .fantome does not contain a champion wad client.")
+					return
+				
+				self._fantome_member_path = member
+				wad_name = Path(member).name
+				self._champion = wad_name.split('.')[0].lower()
+				self.detected_wad_name.set(f"Detected: {wad_name}")
+				
+				# Extract mod wad
+				self._set_status("Extracting mod .wad.client from .fantome...")
+				mod_wad_path = mod_dir / wad_name
+				self._extract_file_from_fantome(fantome, member, mod_wad_path)
+				
+				# Extract hashes from fantome
+				try:
+					temp_unpack = mod_dir / 'temp_for_hashes'
+					temp_unpack.mkdir(parents=True, exist_ok=True)
+					temp_ok = self._try_extract_wad(mod_wad_path, temp_unpack, hashes_dir)
+					if temp_ok:
+						self._extract_hashes_from_folder(temp_unpack, hashes_dir)
+						shutil.rmtree(temp_unpack, ignore_errors=True)
+				except Exception:
+					pass
+				
+				# Unpack mod wad
+				self._set_status("Unpacking mod .wad.client...")
+				mod_unpack = mod_dir / 'unpacked'
+				self._try_extract_wad(mod_wad_path, mod_unpack, hashes_dir)
+			
+			# Populate BIN dropdown
+			self._set_status("Populating BIN dropdown...")
+			self._populate_bin_dropdown(mod_unpack)
+			
+			self._set_status("Quick extraction complete. Please select main BIN and proceed.")
+			self.step_completed[1] = True
+			self.root.after(0, self._update_nav)
+			# Show step 2 (BIN selection) - user must select BIN before proceeding
+			self.root.after(0, lambda: self._show_step(2))
+		
+		except Exception as e:
+			self._set_status(f"Error: {e}")
+			import traceback
+			traceback.print_exc()
+	
+	def _detect_and_extract_with_bin(self):
+		"""Full extraction with selected BIN - extracts linked BINs for the selected BIN and merges them"""
+		# This is the same as _detect_and_extract but uses the selected BIN to extract linked BINs
+		# We'll call the original function but modify it to use selected BIN
+		self._detect_and_extract()
+	
 	def _detect_and_extract(self):
 		try:
 			champs_dir = Path(self.champions_dir.get().strip())
@@ -2286,6 +2778,19 @@ class WizardApp:
 				self._set_status("Unpacking fresh .wad.client (best-effort)...")
 				fresh_unpack = fresh_dir / 'unpacked'
 				ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
+				
+				# Extract linked BINs from fresh extracted folder for the selected BIN
+				# This reads the fresh BIN to get linked paths and stores them for merging
+				try:
+					selected_bin = self.main_bin_choice.get().strip()
+					if selected_bin:
+						self._set_status(f"Reading linked BINs from fresh {selected_bin}...")
+						self._extract_linked_bins_for_selected_bin(fresh_wad_copy, fresh_unpack, hashes_dir, champ_name, selected_bin)
+					else:
+						self._set_status("Warning: No BIN selected, skipping linked BIN extraction")
+				except Exception as e:
+					self._set_status(f"Warning: Linked BIN extraction skipped: {e}")
+					print(f"[DEBUG] Linked BIN extraction error: {e}")
 				
 			else:
 				# FANTOME MODE: Original extraction logic
@@ -2348,14 +2853,47 @@ class WizardApp:
 				self._set_status("Unpacking fresh .wad.client (best-effort)...")
 				fresh_unpack = fresh_dir / 'unpacked'
 				ok_fresh = self._try_extract_wad(fresh_wad_copy, fresh_unpack, hashes_dir)
+				
+				# Extract linked BINs from fresh extracted folder for the selected BIN
+				# This reads the fresh BIN to get linked paths and stores them for merging
+				try:
+					selected_bin = self.main_bin_choice.get().strip()
+					if selected_bin:
+						self._set_status(f"Reading linked BINs from fresh {selected_bin}...")
+						self._extract_linked_bins_for_selected_bin(fresh_wad_copy, fresh_unpack, hashes_dir, self._champion, selected_bin)
+					else:
+						self._set_status("Warning: No BIN selected, skipping linked BIN extraction")
+				except Exception as e:
+					self._set_status(f"Warning: Linked BIN extraction skipped: {e}")
+					print(f"[DEBUG] Linked BIN extraction error: {e}")
 			
 			# Convert mod HUD DDS files to TEX FIRST (before any other conversions)
 			# This ensures mod's HUD files are in the correct format from the start
 			champ = getattr(self, '_champion', '').lower()
 			if champ:
 				try:
+					# Find the main BIN path based on selected BIN
+					main_bin_path = None
+					selected_bin = self.main_bin_choice.get().strip() if hasattr(self, 'main_bin_choice') else None
+					if selected_bin:
+						skins_dir = mod_unpack / 'data' / 'characters' / champ / 'skins'
+						if skins_dir.exists():
+							selected_lower = selected_bin.lower().strip()
+							skin_idx = None
+							if selected_lower == 'base':
+								skin_idx = 0
+							else:
+								m = re.search(r"(skin)?\s*(\d+)", selected_lower)
+								if m:
+									skin_idx = int(m.group(2))
+							
+							if skin_idx is not None:
+								main_bin_path = skins_dir / f'skin{skin_idx}.bin'
+								if not main_bin_path.exists():
+									main_bin_path = None
+					
 					self._set_status("Converting mod HUD DDS files to TEX (before overlay)...")
-					hud_converted_count = self._convert_hud_dds_to_tex(mod_unpack, champ)
+					hud_converted_count = self._convert_hud_dds_to_tex(mod_unpack, champ, main_bin_path)
 					if hud_converted_count > 0:
 						self._set_status(f"Converted {hud_converted_count} mod HUD DDS file(s) to TEX")
 				except Exception as e:
@@ -2400,13 +2938,10 @@ class WizardApp:
 			self._set_status("Overlaying mod over fresh (overwrite)...")
 			copied, skipped = self._overlay_copy(mod_unpack, fresh_unpack)
 			
-			# Populate BIN dropdown with available skins from the mod
-			self._populate_bin_dropdown(mod_unpack)
-			
-			self._set_status(f"Overlay complete: copied {copied}, skipped {skipped}. Proceed to Step 3 to choose main BIN and Next to repath.")
+			self._set_status(f"Overlay complete: copied {copied}, skipped {skipped}. Proceed to Step 5 to repath.")
 
-			# Mark step 1 as complete and enable Next button
-			self.step_completed[1] = True
+			# Mark step 3 as complete (full extraction with linked BINs) and enable Next button
+			self.step_completed[3] = True
 			self.root.after(0, self._update_nav)
 
 			# Do not repath here; wait for user to proceed to Step 3/4
@@ -3251,8 +3786,232 @@ class WizardApp:
 		except Exception as e:
 			self._set_status(f"Error: {e}")
 
-	def _repair_bin_file(self, bin_path: Path):
+	def _extract_linked_bins_for_selected_bin(self, fresh_wad_path: Path, fresh_unpack: Path, hashes_dir: Path, champion: str, selected_bin: str):
+		"""
+		Find and store linked BIN paths from the fresh extracted BIN (not from WAD).
+		The linked BINs should already be in fresh_unpack from the initial extraction.
+		This just reads the fresh BIN to get the linked paths and stores them for later merging.
+		"""
+		try:
+			import pyRitoFile
+			BIN = pyRitoFile.bin.BIN
+			champ = champion.lower() if champion else ''
+			
+			if not champ or not selected_bin:
+				return
+			
+			# Find the specific BIN file in fresh_unpack matching the selected BIN
+			characters_dir = fresh_unpack / 'data' / 'characters'
+			if not characters_dir.exists():
+				return
+			
+			# Parse selected BIN (e.g., "Skin0", "Skin5", "Base")
+			selected_lower = selected_bin.lower().strip()
+			skin_idx = None
+			if selected_lower == 'base':
+				skin_idx = 0
+			else:
+				m = re.search(r"(skin)?\s*(\d+)", selected_lower)
+				if m:
+					skin_idx = int(m.group(2))
+			
+			# Find the matching BIN file in fresh folder
+			target_bin_path = None
+			for char_folder in characters_dir.iterdir():
+				if not char_folder.is_dir():
+					continue
+				skins_dir = char_folder / 'skins'
+				if skins_dir.exists():
+					for bin_file in skins_dir.rglob('*.bin'):
+						rel_path = str(bin_file.relative_to(fresh_unpack)).replace('\\', '/')
+						# Check if this BIN matches the selected skin
+						if skin_idx is not None:
+							if f"/skins/skin{skin_idx}/" in rel_path.lower() or bin_file.name.lower() == f"skin{skin_idx}.bin":
+								target_bin_path = bin_file
+								break
+						# Also check by name
+						if selected_lower in rel_path.lower():
+							target_bin_path = bin_file
+							break
+					if target_bin_path:
+						break
+			
+			if not target_bin_path or not target_bin_path.exists():
+				print(f"[DEBUG] Could not find selected BIN {selected_bin} in fresh folder")
+				return
+			
+			print(f"[DEBUG] Found fresh BIN for linked paths: {target_bin_path}")
+			
+			# Read the fresh BIN to get its linked BIN paths
+			target_bin = BIN().read(str(target_bin_path))
+			bin_path_rel = str(target_bin_path.relative_to(fresh_unpack)).replace('\\', '/')
+			
+			# Store fresh BIN paths and their linked BIN paths before overlay
+			if not hasattr(self, '_fresh_bin_linked_paths'):
+				self._fresh_bin_linked_paths = {}
+			
+			bin_linked_paths = []
+			for link in target_bin.links:
+				if link and isinstance(link, str) and link.lower().endswith('.bin'):
+					link_normalized = link.replace('\\', '/')
+					bin_linked_paths.append(link_normalized)
+			
+			# Store linked paths for this BIN (relative to fresh_unpack)
+			self._fresh_bin_linked_paths[bin_path_rel] = bin_linked_paths
+			
+			if not bin_linked_paths:
+				print(f"[DEBUG] No linked BINs found in fresh BIN {selected_bin}")
+				self._set_status(f"No linked BINs found in fresh {selected_bin}")
+			else:
+				print(f"[DEBUG] Found {len(bin_linked_paths)} linked BIN path(s) in fresh {selected_bin}: {bin_linked_paths}")
+				self._set_status(f"Found {len(bin_linked_paths)} linked BIN path(s) for {selected_bin}")
+		
+		except Exception as e:
+			print(f"[DEBUG] Error in _extract_linked_bins_for_selected_bin: {e}")
+			import traceback
+			traceback.print_exc()
+	
+	def _extract_linked_bins_from_fresh(self, fresh_wad_path: Path, fresh_unpack: Path, hashes_dir: Path, champion: str):
+		"""
+		Extract linked BIN files from fresh WAD that are referenced by the main BIN.
+		This ensures we have the newer linked BINs available for merging into the mod BIN.
+		Also stores the linked BIN paths in a class variable for later use during repair.
+		"""
+		try:
+			import pyRitoFile
+			from pyRitoFile import wad as pywad
+			from pyRitoFile.stream import BytesStream
+			
+			BIN = pyRitoFile.bin.BIN
+			champ = champion.lower() if champion else ''
+			
+			if not champ:
+				return
+			
+			# Find the main BIN file in fresh_unpack (e.g., Skin0.bin)
+			# We'll check all character subfolders
+			characters_dir = fresh_unpack / 'data' / 'characters'
+			if not characters_dir.exists():
+				return
+			
+			# Find all BIN files in character folders
+			main_bin_candidates = []
+			for char_folder in characters_dir.iterdir():
+				if not char_folder.is_dir():
+					continue
+				skins_dir = char_folder / 'skins'
+				if skins_dir.exists():
+					for bin_file in skins_dir.rglob('*.bin'):
+						main_bin_candidates.append(bin_file)
+			
+			if not main_bin_candidates:
+				print(f"[DEBUG] No BIN files found in fresh_unpack to extract linked BINs from")
+				return
+			
+			# Store fresh BIN paths and their linked BIN paths before overlay
+			# This allows us to access them even after mod BINs overwrite fresh BINs
+			if not hasattr(self, '_fresh_bin_linked_paths'):
+				self._fresh_bin_linked_paths = {}
+			
+			# Read the WAD to get access to chunks
+			hashtables = self._load_wad_hashtables(hashes_dir)
+			w = pywad.WAD().read(str(fresh_wad_path))
+			try:
+				w.un_hash(hashtables)
+			except Exception:
+				pass
+			
+			# Collect all linked BIN paths from all main BINs
+			linked_bin_paths = set()
+			for main_bin_path in main_bin_candidates:
+				try:
+					main_bin = BIN().read(str(main_bin_path))
+					# Store the linked paths for this BIN (relative to fresh_unpack)
+					main_bin_rel = str(main_bin_path.relative_to(fresh_unpack)).replace('\\', '/')
+					bin_linked_paths = []
+					for link in main_bin.links:
+						if link and isinstance(link, str) and link.lower().endswith('.bin'):
+							link_normalized = link.replace('\\', '/')
+							linked_bin_paths.add(link_normalized)
+							bin_linked_paths.append(link_normalized)
+					# Store linked paths for this BIN
+					self._fresh_bin_linked_paths[main_bin_rel] = bin_linked_paths
+				except Exception as e:
+					print(f"[DEBUG] Error reading main BIN {main_bin_path}: {e}")
+					continue
+			
+			if not linked_bin_paths:
+				print(f"[DEBUG] No linked BINs found in fresh BINs")
+				return
+			
+			print(f"[DEBUG] Found {len(linked_bin_paths)} linked BIN path(s) to extract")
+			
+			# Extract each linked BIN from the WAD
+			extracted_count = 0
+			with BytesStream.reader(str(fresh_wad_path)) as bs:
+				for chunk in w.chunks:
+					try:
+						chunk.read_data(bs)
+						
+						# Get the file path for this chunk
+						chunk_path = chunk.hash.replace('\\', '/')
+						
+						# Add extension if known
+						if pyRitoFile.wad.WADHasher.is_hash(chunk.hash) and chunk.extension:
+							ext = f'.{chunk.extension}'
+							if not chunk_path.endswith(ext):
+								chunk_path += ext
+						
+						# Check if this chunk matches any linked BIN path
+						chunk_path_lower = chunk_path.lower()
+						should_extract = False
+						target_path = None
+						matched_linked_path = None
+						
+						for linked_path in linked_bin_paths:
+							linked_path_lower = linked_path.lower()
+							# Check if chunk path matches linked path (exact or by filename)
+							if (chunk_path_lower == linked_path_lower or 
+								chunk_path_lower.endswith(linked_path_lower) or
+								Path(chunk_path).name.lower() == Path(linked_path).name.lower()):
+								should_extract = True
+								target_path = fresh_unpack / linked_path
+								matched_linked_path = linked_path
+								break
+						
+						if should_extract and chunk.data is not None:
+							# Extract this linked BIN file
+							target_path.parent.mkdir(parents=True, exist_ok=True)
+							
+							# Check if file already exists (might have been extracted already)
+							if not target_path.exists():
+								try:
+									with open(target_path, 'wb') as f:
+										f.write(chunk.data)
+									extracted_count += 1
+									print(f"[DEBUG] Extracted linked BIN: {matched_linked_path}")
+								except Exception as e:
+									print(f"[DEBUG] Error extracting linked BIN {matched_linked_path}: {e}")
+						
+						chunk.free_data()
+					except Exception as e:
+						print(f"[DEBUG] Error processing chunk for linked BIN extraction: {e}")
+						continue
+			
+			if extracted_count > 0:
+				print(f"[DEBUG] Extracted {extracted_count} linked BIN file(s) from fresh WAD")
+			else:
+				print(f"[DEBUG] Linked BINs may already be extracted or not found in WAD")
+		
+		except Exception as e:
+			print(f"[DEBUG] Error in _extract_linked_bins_from_fresh: {e}")
+			import traceback
+			traceback.print_exc()
+	
+	def _repair_bin_file(self, bin_path: Path, fresh_unpack: Path = None):
 		# Inline minimal FrogFixes: StaticMaterial and HealthBar fixes
+		# Also merges linked BIN entries from fresh folder (newer versions)
+		print(f"[DEBUG] Repair: Starting repair for BIN: {bin_path}")
 		# Load BIN hash tables from AppData
 		hashes_dir = self._hash_dir()
 		WizardApp._HashStorage.read_all_hashes(hashes_dir)
@@ -3273,6 +4032,162 @@ class WizardApp:
 					if raw_name and raw_name[0].islower():
 						H[raw_name[0].upper() + raw_name[1:]] = hex_hash
 		b = BIN().read(str(bin_path))
+		
+		# Add linked BIN paths from fresh folder to mod BIN's links list
+		# The repather will automatically combine them - we just need to add the paths
+		# Only do this if the toggle is enabled
+		if self.merge_linked_bins_enabled.get() and fresh_unpack and fresh_unpack.exists():
+			try:
+				# Extract champion name and skin number from the mod BIN
+				champion_name = None
+				skin_number = 0  # Default to skin0
+				
+				# Find SkinCharacterDataProperties entry in mod BIN
+				scdp_hash = H.get('SkinCharacterDataProperties')
+				if scdp_hash:
+					for entry in b.entries:
+						if entry.type == scdp_hash:
+							# Look for championSkinName field
+							champion_skin_name_hash = H.get('championSkinName')
+							if champion_skin_name_hash:
+								for field in entry.data:
+									if field.hash == champion_skin_name_hash and hasattr(field, 'data') and isinstance(field.data, str):
+										champion_skin_name = field.data
+										print(f"[DEBUG] Repair: Found championSkinName: {champion_skin_name}")
+										
+										# Extract champion name and skin number
+										# Format: "YoneSkin55" -> champion="Yone", skin=55
+										# Format: "Yone" -> champion="Yone", skin=0
+										# Format: "BaseYorick" -> champion="Yorick", skin=0 (strip "Base" prefix)
+										if 'Skin' in champion_skin_name:
+											# Has skin number (e.g., "YoneSkin55")
+											parts = champion_skin_name.split('Skin')
+											if len(parts) == 2:
+												champion_name = parts[0]
+												# Strip "Base" prefix if present (e.g., "BaseYone" -> "Yone")
+												if champion_name.startswith('Base') and len(champion_name) > 4:
+													champion_name = champion_name[4:]
+												try:
+													skin_number = int(parts[1])
+												except ValueError:
+													skin_number = 0
+										else:
+											# Just champion name (e.g., "Yone" or "BaseYorick") -> skin0
+											champion_name = champion_skin_name
+											# Strip "Base" prefix if present (e.g., "BaseYorick" -> "Yorick")
+											if champion_name.startswith('Base') and len(champion_name) > 4:
+												champion_name = champion_name[4:]
+											skin_number = 0
+										break
+							break
+				
+				# If we couldn't find championSkinName, try to extract from path
+				if not champion_name:
+					bin_path_str = str(bin_path).replace('\\', '/')
+					try:
+						path_parts = bin_path_str.lower().split('/')
+						if 'characters' in path_parts:
+							char_idx = path_parts.index('characters')
+							if char_idx + 1 < len(path_parts):
+								champion_name = path_parts[char_idx + 1]
+					except Exception:
+						pass
+				
+				if not champion_name:
+					print(f"[DEBUG] Repair: Could not determine champion name, skipping linked BIN merge")
+					return
+				
+				print(f"[DEBUG] Repair: Using champion={champion_name}, skin={skin_number}")
+				
+				# Use the stored fresh BIN linked paths (captured BEFORE overlay)
+				# The key is the relative path from fresh_unpack, e.g., "data/characters/yorick/skins/skin0.bin"
+				bin_path_rel = str(bin_path.relative_to(fresh_unpack)).replace('\\', '/')
+				
+				# Also try alternative paths in case of case differences
+				bin_path_rel_lower = bin_path_rel.lower()
+				
+				fresh_linked_paths = []
+				if hasattr(self, '_fresh_bin_linked_paths') and self._fresh_bin_linked_paths:
+					# Try exact match first
+					if bin_path_rel in self._fresh_bin_linked_paths:
+						fresh_linked_paths = self._fresh_bin_linked_paths[bin_path_rel]
+						print(f"[DEBUG] Repair: Found stored linked paths for: {bin_path_rel}")
+					else:
+						# Try case-insensitive match
+						for stored_key, stored_paths in self._fresh_bin_linked_paths.items():
+							if stored_key.lower() == bin_path_rel_lower:
+								fresh_linked_paths = stored_paths
+								print(f"[DEBUG] Repair: Found stored linked paths (case-insensitive) for: {stored_key}")
+								break
+					
+					# If still not found, try constructing the expected key
+					if not fresh_linked_paths:
+						expected_key = f"data/characters/{champion_name.lower()}/skins/skin{skin_number}.bin"
+						if expected_key in self._fresh_bin_linked_paths:
+							fresh_linked_paths = self._fresh_bin_linked_paths[expected_key]
+							print(f"[DEBUG] Repair: Found stored linked paths using constructed key: {expected_key}")
+						else:
+							# Try case-insensitive match on constructed key
+							expected_key_lower = expected_key.lower()
+							for stored_key, stored_paths in self._fresh_bin_linked_paths.items():
+								if stored_key.lower() == expected_key_lower:
+									fresh_linked_paths = stored_paths
+									print(f"[DEBUG] Repair: Found stored linked paths (case-insensitive, constructed key) for: {stored_key}")
+									break
+				
+				if not fresh_linked_paths:
+					print(f"[DEBUG] Repair: No stored linked paths found for {bin_path_rel}, trying to read from file (may be mod BIN after overlay)")
+					# Fallback: try to read from file (but this will be the mod BIN after overlay)
+					fresh_skin_bin_path = fresh_unpack / 'data' / 'characters' / champion_name.lower() / 'skins' / f'skin{skin_number}.bin'
+					if fresh_skin_bin_path.exists():
+						fresh_bin = BIN().read(str(fresh_skin_bin_path))
+						for link in fresh_bin.links:
+							if link and isinstance(link, str) and link.lower().endswith('.bin'):
+								link_normalized = link.replace('\\', '/')
+								fresh_linked_paths.append(link_normalized)
+						print(f"[DEBUG] Repair: Read {len(fresh_linked_paths)} linked paths from file (may be mod BIN)")
+					else:
+						print(f"[DEBUG] Repair: Fresh BIN file not found: {fresh_skin_bin_path}, skipping linked BIN merge")
+						return
+				
+				print(f"[DEBUG] Repair: Found {len(fresh_linked_paths)} linked BIN path(s) in fresh BIN")
+				print(f"[DEBUG] Repair: Mod BIN currently has {len(b.links)} linked BIN path(s)")
+				
+				if fresh_linked_paths:
+					links_added = 0
+					links_skipped_base = 0
+					links_already_present = 0
+					
+					for link_path in fresh_linked_paths:
+						# Filter out champion base BIN
+						champion_base_pattern = f"DATA/Characters/{champion_name}/{champion_name}.bin"
+						if link_path.replace('\\', '/').lower() == champion_base_pattern.lower():
+							links_skipped_base += 1
+							print(f"[DEBUG] Repair: Skipping champion base BIN: {link_path}")
+							continue
+						
+						# Add the linked path to the mod BIN's links list if not already present
+						if link_path not in b.links:
+							b.links.append(link_path)
+							links_added += 1
+							print(f"[DEBUG] Repair: Added linked BIN path to links: {link_path}")
+						else:
+							links_already_present += 1
+							print(f"[DEBUG] Repair: Linked BIN path already present in mod BIN: {link_path}")
+					
+					print(f"[DEBUG] Repair: Summary - Added: {links_added}, Already present: {links_already_present}, Skipped (base): {links_skipped_base}")
+					if links_added > 0:
+						print(f"[DEBUG] Repair: Added {links_added} linked BIN path(s) from fresh skin{skin_number}.bin - repather will combine them automatically")
+					else:
+						print(f"[DEBUG] Repair: No new linked BIN paths added (all were already present or filtered)")
+				else:
+					print(f"[DEBUG] Repair: No linked BIN paths found in fresh skin{skin_number}.bin")
+			
+			except Exception as e:
+				print(f"[DEBUG] Error adding linked BIN paths: {e}")
+				import traceback
+				traceback.print_exc()
+		
 		# StaticMaterial fixes
 		for entry in b.entries:
 			if entry.type == H['StaticMaterialDef']:
@@ -3334,92 +4249,9 @@ class WizardApp:
 					entry.data.append(hb)
 		# write back
 		b.write(str(bin_path))
+		
 		WizardApp._HashStorage.free_all_hashes()
 	
-	def _merge_cac_entries_from_fresh(self, main_bin_path: Path, fresh_unpack: Path):
-		"""Merge ALL CAC (ContextualActionData) entries from fresh folder BINs into main skin bin"""
-		try:
-			# Load hashes
-			hashes_dir = self._hash_dir()
-			WizardApp._HashStorage.read_all_hashes(hashes_dir)
-			
-			BIN = pyRitoFile.bin.BIN
-			H = {}
-			for fname in ['hashes.binentries.txt', 'hashes.binhashes.txt', 'hashes.bintypes.txt', 'hashes.binfields.txt']:
-				if fname in WizardApp._HashStorage.hashtables:
-					for hex_hash, raw_name in WizardApp._HashStorage.hashtables[fname].items():
-						H[raw_name] = hex_hash
-						if raw_name and raw_name[0].islower():
-							H[raw_name[0].upper() + raw_name[1:]] = hex_hash
-			
-			# Read main bin
-			main_bin = BIN().read(str(main_bin_path))
-			
-			# Get existing CAC entry hashes from main bin
-			existing_cac_hashes = set()
-			for entry in main_bin.entries:
-				if entry.type == H.get('ContextualActionData') or entry.type == H.get('contextualactiondata'):
-					existing_cac_hashes.add(entry.hash)
-			
-			# Collect all CAC entries from fresh folder
-			found_cac_entries = []  # List of (entry, links to add)
-			found_cac_links = set()
-			
-			def scan_fresh_bin(bin_path: Path):
-				try:
-					bin_obj = BIN().read(str(bin_path))
-					
-					# Collect all CAC entries and their links
-					for entry in bin_obj.entries:
-						if entry.type == H.get('ContextualActionData') or entry.type == H.get('contextualactiondata'):
-							# Only add if not already in main bin
-							if entry.hash not in existing_cac_hashes:
-								found_cac_entries.append(entry)
-								existing_cac_hashes.add(entry.hash)  # Prevent duplicates
-								# Also collect CAC links from this bin
-								for link in bin_obj.links:
-									if link and '/CAC/' in link:
-										found_cac_links.add(link)
-				except Exception:
-					pass  # Skip problematic BINs
-			
-			# Scan root of fresh folder
-			fresh_root_bins = list(fresh_unpack.glob('*.bin'))
-			for bin_file in fresh_root_bins:
-				scan_fresh_bin(bin_file)
-			
-			# Scan data folder (but not data/characters)
-			data_folder = fresh_unpack / 'data'
-			if data_folder.exists():
-				for bin_file in data_folder.rglob('*.bin'):
-					bin_path_str = str(bin_file).replace('\\', '/').lower()
-					# Skip data/characters subfolder
-					if '/data/characters/' in bin_path_str:
-						continue
-					scan_fresh_bin(bin_file)
-			
-			# Merge all found CAC entries into main bin
-			if found_cac_entries:
-				# Add all CAC entries
-				main_bin.entries.extend(found_cac_entries)
-				
-				# Add all CAC links that aren't already present
-				for link in found_cac_links:
-					if link not in main_bin.links:
-						main_bin.links.append(link)
-				
-				# Write main bin with merged CAC entries
-				main_bin.write(str(main_bin_path))
-				self._set_status(f"Merged {len(found_cac_entries)} CAC entries into main skin bin")
-			
-			WizardApp._HashStorage.free_all_hashes()
-		except Exception as e:
-			print(f"[DEBUG] Error in _merge_cac_entries_from_fresh: {e}")
-			import traceback
-			traceback.print_exc()
-			if 'hashes_dir' in locals():
-				WizardApp._HashStorage.free_all_hashes()
-
 	def _pack_wad(self, raw_dir: Path, wad_file: Path) -> None:
 		# Local pack using pyRitoFile.wad (mirrors LtMAO.wad_tool.pack)
 		sys.path.insert(0, str(self._project_root()))
