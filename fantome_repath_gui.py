@@ -608,6 +608,18 @@ class WizardApp:
 				json.dump(data, f, indent=2, ensure_ascii=False)
 		except Exception:
 			pass
+	
+	def _is_valid_binary_bin(self, bin_path: Path) -> bool:
+		"""
+		Check if a file is a valid binary BIN file (PROP or PTCH signature).
+		Returns False for text-based BIN files (like #PROP_text format).
+		"""
+		try:
+			with open(bin_path, 'rb') as f:
+				signature = f.read(4).decode('utf-8', errors='ignore')
+				return signature in ('PROP', 'PTCH')
+		except Exception:
+			return False
 
 	def _set_status(self, text: str):
 		try:
@@ -925,6 +937,10 @@ class WizardApp:
 					if file.lower().endswith('.bin'):
 						bin_path = Path(root) / file
 						try:
+							# Check if file is a valid binary BIN file
+							if not self._is_valid_binary_bin(bin_path):
+								continue
+							
 							bin_obj = pyRitoFile.bin.BIN().read(str(bin_path))
 							# Extract file references from BIN
 							for entry in bin_obj.entries:
@@ -1068,6 +1084,11 @@ class WizardApp:
 		modified = False
 		
 		try:
+			# Check if file is a valid binary BIN file
+			if not self._is_valid_binary_bin(bin_path):
+				print(f"[DEBUG] Skipping text-based BIN file: {bin_path}")
+				return (False, 0)
+			
 			import pyRitoFile
 			bin_obj = pyRitoFile.bin.BIN().read(str(bin_path))
 			print(f"[DEBUG] Reading BIN file: {bin_path}")
@@ -1296,6 +1317,11 @@ class WizardApp:
 		
 		if bin_file and bin_file.exists():
 			try:
+				# Check if file is a valid binary BIN file
+				if not self._is_valid_binary_bin(bin_file):
+					print(f"[DEBUG] Skipping text-based BIN file: {bin_file}")
+					return hud_tex_paths
+				
 				import pyRitoFile
 				BIN = pyRitoFile.bin.BIN
 				bin_obj = BIN().read(str(bin_file))
@@ -1680,6 +1706,18 @@ class WizardApp:
 			self.entry_name = {}
 			self.linked_bins = {}
 		
+		def _is_valid_binary_bin(self, bin_path: Path) -> bool:
+			"""
+			Check if a file is a valid binary BIN file (PROP or PTCH signature).
+			Returns False for text-based BIN files (like #PROP_text format).
+			"""
+			try:
+				with open(bin_path, 'rb') as f:
+					signature = f.read(4).decode('utf-8', errors='ignore')
+					return signature in ('PROP', 'PTCH')
+			except Exception:
+				return False
+		
 		def unify_path(self, path: str) -> str:
 			W = self._py.wad.WADHasher
 			p = path.replace('\\','/').lower()
@@ -1700,6 +1738,11 @@ class WizardApp:
 						rel_lower = rel.lower()
 						u = self.unify_path(rel)
 						if u not in self.source_files:
+							# Skip text-based BIN files - they cause errors and can't be processed
+							if rel.lower().endswith('.bin'):
+								if not self._is_valid_binary_bin(Path(full)):
+									print(f"[DEBUG] Skipping text-based BIN file in source: {rel}")
+									continue
 							self.source_files[u] = (full, rel)
 							if rel.lower().endswith('.bin'):
 								self.source_bins[u] = False
@@ -1757,6 +1800,10 @@ class WizardApp:
 					scan_value(field.data, field.type, entry_hash)
 			
 			def scan_bin(bin_path, unify_file):
+				# Check if file is a valid binary BIN file
+				if not self._is_valid_binary_bin(Path(bin_path)):
+					return
+				
 				bin = self._py.bin.BIN().read(bin_path)
 				self.linked_bins[unify_file] = []
 				for link in bin.links:
@@ -1764,6 +1811,13 @@ class WizardApp:
 						continue
 					unify_link = self.unify_path(link)
 					if unify_link in self.source_files:
+						# Double-check it's a valid binary BIN before processing
+						bin_path = Path(self.source_files[unify_link][0])
+						if bin_path.exists() and bin_path.suffix.lower() == '.bin':
+							if not self._is_valid_binary_bin(bin_path):
+								print(f"[DEBUG] Skipping text-based linked BIN: {link}")
+								self.scanned_tree['All_BINs'][unify_link] = (False, link)
+								continue
 						self.scanned_tree['All_BINs'][unify_link] = (True, link)
 						scan_bin(self.source_files[unify_link][0], unify_link)
 						self.linked_bins[unify_file].append(unify_link)
@@ -1780,6 +1834,9 @@ class WizardApp:
 			
 			for unify_file in self.source_bins:
 				if self.source_bins[unify_file]:
+					if unify_file not in self.source_files:
+						print(f"[DEBUG] Warning: unify_file not in source_files: {unify_file}, skipping")
+						continue
 					full, rel = self.source_files[unify_file]
 					self.scanned_tree['All_BINs'][unify_file] = (True, rel)
 					scan_bin(full, unify_file)
@@ -1847,6 +1904,10 @@ class WizardApp:
 					field.data = bum_value(field.data, field.type, entry_hash)
 			
 			def bum_bin(bin_path):
+				# Check if file is a valid binary BIN file
+				if not self._is_valid_binary_bin(Path(bin_path)):
+					return
+				
 				bin = self._py.bin.BIN().read(bin_path)
 				for entry in bin.entries:
 					entry_hash = entry.hash
@@ -1881,6 +1942,9 @@ class WizardApp:
 							short_file = f'{prefix}/' + short_file
 					if not existed:
 						continue
+					if unify_file not in self.source_files:
+						print(f"[DEBUG] Warning: unify_file not in source_files: {unify_file}, skipping")
+						continue
 					source_file = self.source_files[unify_file][0]
 					output_file = os.path.join(output_dir, short_file.lower())
 					if len(os.path.basename(output_file)) > 255:
@@ -1901,6 +1965,11 @@ class WizardApp:
 			if combine_linked:
 				for unify_file in self.source_bins:
 					if self.source_bins[unify_file]:
+						bum_file_path = Path(bum_files[unify_file])
+						# Check if file is a valid binary BIN file
+						if not self._is_valid_binary_bin(bum_file_path):
+							continue
+						
 						source_bin = self._py.bin.BIN().read(bum_files[unify_file])
 						linked_unify_files = self._flat_list_linked_bins(unify_file, self.linked_bins)
 						new_links = []
@@ -1922,6 +1991,10 @@ class WizardApp:
 							if not os.path.exists(bum_file):
 								continue
 							try:
+								# Check if file is a valid binary BIN file
+								if not self._is_valid_binary_bin(Path(bum_file)):
+									continue
+								
 								linked_bin = self._py.bin.BIN().read(bum_file)
 								# Only add entries that don't already exist (by hash)
 								new_entries = []
@@ -2054,6 +2127,11 @@ class WizardApp:
 			print(f"[DEBUG] No Skin Lite: Using main BIN: {main_skin_bin}")
 			
 			# First, read the source BIN once to get the original paths
+			# Check if file is a valid binary BIN file
+			if not self._is_valid_binary_bin(main_skin_bin):
+				print(f"[DEBUG] No Skin Lite: Skipping text-based BIN file: {main_skin_bin}")
+				return
+			
 			source_bin = pyRitoFile.bin.BIN().read(str(main_skin_bin))
 			
 			# Find base_scdp, base_rr, and base_mrr from main skin
@@ -2106,6 +2184,11 @@ class WizardApp:
 				
 				try:
 					# CRITICAL: Read the source BIN fresh for each iteration
+					# Check if file is a valid binary BIN file
+					if not self._is_valid_binary_bin(main_skin_bin):
+						print(f"[DEBUG] No Skin Lite: Skipping text-based BIN file: {main_skin_bin}")
+						continue
+					
 					target_bin = pyRitoFile.bin.BIN().read(str(main_skin_bin))
 					
 					# Find the entries in this fresh copy
@@ -2218,11 +2301,15 @@ class WizardApp:
 		desired_raw = (self.main_bin_choice.get() or '').strip()
 		desired = desired_raw.lower()
 		if not champ:
-			self._set_status("Champion not detected from wad; cannot repath.")
+			error_msg = "Champion not detected from wad; cannot repath."
+			self._set_status(error_msg)
+			print(f"[DEBUG] _repath_fresh: {error_msg}")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
 		if not desired:
-			self._set_status("Please enter a main BIN name (e.g., Skin0) before repath.")
+			error_msg = "Please enter a main BIN name (e.g., Skin0) before repath."
+			self._set_status(error_msg)
+			print(f"[DEBUG] _repath_fresh: {error_msg}")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
 		# Extract index from desired (e.g., 'skin5' -> 5), treat 'base' as 0
@@ -2241,7 +2328,9 @@ class WizardApp:
 		
 		# Find all character subfolders
 		if not characters_dir.exists():
-			self._set_status(f"Characters folder not found: {characters_dir}")
+			error_msg = f"Characters folder not found: {characters_dir}"
+			self._set_status(error_msg)
+			print(f"[DEBUG] _repath_fresh: {error_msg}")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
 		
@@ -2282,20 +2371,25 @@ class WizardApp:
 		
 		if not selected_unifys:
 			preview = ', '.join(available[:8]) + (', ...' if len(available) > 8 else '')
-			self._set_status(f"Main BIN not found for '{desired_raw}'. Found examples: {preview}")
-			WizardApp._HashStorage.free_all_hashes()
-			return False
-		if not selected_unifys:
-			self._set_status("Could not resolve selected BIN(s) to source set.")
+			error_msg = f"Main BIN not found for '{desired_raw}'. Found examples: {preview}"
+			self._set_status(error_msg)
+			print(f"[DEBUG] _repath_fresh: {error_msg}")
 			WizardApp._HashStorage.free_all_hashes()
 			return False
 		
 		for u in selected_unifys:
-			bum.source_bins[u] = True
+			# Make sure the file exists and is a valid binary BIN before adding
 			if u not in bum.source_files:
 				cand = fresh_unpack / Path(u)
 				if cand.exists():
+					# Skip text-based BIN files
+					if cand.suffix.lower() == '.bin' and not bum._is_valid_binary_bin(cand):
+						print(f"[DEBUG] Skipping text-based BIN in selected_unifys: {u}")
+						continue
 					bum.source_files[u] = (str(cand), u)
+			# Only mark as source bin if it's actually in source_files
+			if u in bum.source_files:
+				bum.source_bins[u] = True
 		# Repair, scan, and bum
 		# Only repair BINs from the main champion folder (not subfolders like annietibbers, lantern)
 		fixed = 0
@@ -2347,7 +2441,22 @@ class WizardApp:
 		# No additional conversion needed here - overlay already copied mod's HUD TEX files to fresh_unpack
 		
 		self._set_status(f"Repaired {fixed} BIN(s); scanning for repath (champ={champ})...")
-		bum.scan()
+		try:
+			bum.scan()
+		except Exception as scan_err:
+			self._set_status(f"Scan failed: {scan_err}")
+			WizardApp._HashStorage.free_all_hashes()
+			import traceback
+			traceback.print_exc()
+			return False
+		
+		# Check if scan found any entries
+		if len(bum.scanned_tree) == 0:
+			error_msg = "No BIN entries found to repath. Check if BIN files are valid binary format."
+			self._set_status(error_msg)
+			print(f"[DEBUG] _repath_fresh: {error_msg}")
+			WizardApp._HashStorage.free_all_hashes()
+			return False
 		
 		# Use champion name in the repathed folder name
 		output_dir = self._work_root() / f'repathed_{champ}'
@@ -2426,7 +2535,11 @@ class WizardApp:
 			WizardApp._HashStorage.free_all_hashes()
 			return True
 		except Exception as e:
-			self._set_status(f"Repath failed: {e}")
+			error_msg = f"Repath failed: {e}"
+			self._set_status(error_msg)
+			print(f"[DEBUG] Exception in _repath_fresh: {e}")
+			import traceback
+			traceback.print_exc()
 			WizardApp._HashStorage.free_all_hashes()
 			return False
 
@@ -3762,7 +3875,9 @@ class WizardApp:
 				return
 			
 			self._set_status("Repathing merged content...")
+			print(f"[DEBUG] Starting repath for: {fresh_unpack}")
 			repath_ok = self._repath_fresh(fresh_unpack)
+			print(f"[DEBUG] Repath result: {repath_ok}")
 			if repath_ok:
 				self._set_status("Repath complete. Cleaning up temporary files...")
 				# Clean up temporary extraction folders
@@ -3782,9 +3897,19 @@ class WizardApp:
 				self._set_status("Repath complete! Checking for missing files...")
 				self.root.after(100, lambda: threading.Thread(target=self._auto_check_and_fix_missing, daemon=True).start())
 			else:
-				self._set_status("Repath step failed or skipped.")
+				# Get the last status message to see what went wrong
+				current_status = self.s2_status_text.get()
+				if current_status and "failed" not in current_status.lower() and "error" not in current_status.lower():
+					self._set_status(f"Repath step failed or skipped. Last status: {current_status}")
+				else:
+					self._set_status(f"Repath step failed or skipped. {current_status}")
+				print(f"[DEBUG] Repath failed. Last status: {current_status}")
 		except Exception as e:
-			self._set_status(f"Error: {e}")
+			error_msg = f"Error during repath: {e}"
+			self._set_status(error_msg)
+			print(f"[DEBUG] Exception in _run_repath_current: {e}")
+			import traceback
+			traceback.print_exc()
 
 	def _extract_linked_bins_for_selected_bin(self, fresh_wad_path: Path, fresh_unpack: Path, hashes_dir: Path, champion: str, selected_bin: str):
 		"""
@@ -3843,6 +3968,11 @@ class WizardApp:
 			print(f"[DEBUG] Found fresh BIN for linked paths: {target_bin_path}")
 			
 			# Read the fresh BIN to get its linked BIN paths
+			# Check if file is a valid binary BIN file
+			if not self._is_valid_binary_bin(target_bin_path):
+				print(f"[DEBUG] Skipping text-based BIN file: {target_bin_path}")
+				return
+			
 			target_bin = BIN().read(str(target_bin_path))
 			bin_path_rel = str(target_bin_path.relative_to(fresh_unpack)).replace('\\', '/')
 			
@@ -3925,6 +4055,10 @@ class WizardApp:
 			linked_bin_paths = set()
 			for main_bin_path in main_bin_candidates:
 				try:
+					# Check if file is a valid binary BIN file
+					if not self._is_valid_binary_bin(main_bin_path):
+						continue
+					
 					main_bin = BIN().read(str(main_bin_path))
 					# Store the linked paths for this BIN (relative to fresh_unpack)
 					main_bin_rel = str(main_bin_path.relative_to(fresh_unpack)).replace('\\', '/')
@@ -4031,6 +4165,12 @@ class WizardApp:
 					# Also add capitalized version for compatibility
 					if raw_name and raw_name[0].islower():
 						H[raw_name[0].upper() + raw_name[1:]] = hex_hash
+		
+		# Check if file is a valid binary BIN file
+		if not self._is_valid_binary_bin(bin_path):
+			print(f"[DEBUG] Skipping text-based BIN file: {bin_path}")
+			return
+		
 		b = BIN().read(str(bin_path))
 		
 		# Add linked BIN paths from fresh folder to mod BIN's links list
@@ -4140,12 +4280,14 @@ class WizardApp:
 					# Fallback: try to read from file (but this will be the mod BIN after overlay)
 					fresh_skin_bin_path = fresh_unpack / 'data' / 'characters' / champion_name.lower() / 'skins' / f'skin{skin_number}.bin'
 					if fresh_skin_bin_path.exists():
-						fresh_bin = BIN().read(str(fresh_skin_bin_path))
-						for link in fresh_bin.links:
-							if link and isinstance(link, str) and link.lower().endswith('.bin'):
-								link_normalized = link.replace('\\', '/')
-								fresh_linked_paths.append(link_normalized)
-						print(f"[DEBUG] Repair: Read {len(fresh_linked_paths)} linked paths from file (may be mod BIN)")
+						# Check if file is a valid binary BIN file
+						if self._is_valid_binary_bin(fresh_skin_bin_path):
+							fresh_bin = BIN().read(str(fresh_skin_bin_path))
+							for link in fresh_bin.links:
+								if link and isinstance(link, str) and link.lower().endswith('.bin'):
+									link_normalized = link.replace('\\', '/')
+									fresh_linked_paths.append(link_normalized)
+							print(f"[DEBUG] Repair: Read {len(fresh_linked_paths)} linked paths from file (may be mod BIN)")
 					else:
 						print(f"[DEBUG] Repair: Fresh BIN file not found: {fresh_skin_bin_path}, skipping linked BIN merge")
 						return
@@ -4469,6 +4611,10 @@ class WizardApp:
 		for full_file_index, full_file in enumerate(full_files):
 			if full_file.endswith('.bin'):
 				try:
+					# Check if file is a valid binary BIN file
+					if not self._is_valid_binary_bin(Path(full_file)):
+						continue
+					
 					bin_obj = pyRitoFile.bin.BIN().read(full_file)
 					bin_obj.un_hash(WizardApp._HashStorage.hashtables)
 					result = self._pyntex_parse_bin(bin_obj, existing_files=existing_files, prefix=prefix)
