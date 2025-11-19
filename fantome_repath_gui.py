@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox
 import random
 import string
 import re
+import webbrowser
 
 # Add project root to path for pyRitoFile
 # Handle both development and PyInstaller bundled mode
@@ -322,6 +323,66 @@ class WizardApp:
 		bin_hint = self._label(s3, text="💡 Select from dropdown or type manually (e.g., Skin0, Skin5, Base). This will be used to extract and merge linked BINs.", 
 		                       font=('Arial', 8), foreground='gray')
 		bin_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+		
+		# Paid skin warning and link
+		paid_skin_frame = self._frame(s3)
+		paid_skin_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
+		paid_skin_warning = self._label(paid_skin_frame, 
+		                                text="⚠️ IMPORTANT: If you're using a paid skin, you need to select the correct Skin ID. ", 
+		                                font=('Arial', 9), foreground='orange')
+		paid_skin_warning.pack(anchor=tk.W)
+		
+		# Link to skin explorer
+		link_frame = self._frame(s3)
+		link_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
+		link_label = self._label(link_frame, text="🔗 Find your skin ID here: ", font=('Arial', 9))
+		link_label.pack(side=tk.LEFT)
+		
+		def open_skin_explorer():
+			webbrowser.open("https://sirdexal.pages.dev/skin-explorer")
+		
+		link_button = self._button(link_frame, text="Skin Explorer", command=open_skin_explorer, width=15)
+		link_button.pack(side=tk.LEFT, padx=(0, 8))
+		
+		# Example image
+		try:
+			# Handle both development and PyInstaller bundled mode
+			if getattr(sys, 'frozen', False):
+				# Running as compiled exe - image is in _MEIPASS or same directory as exe
+				example_img_path = Path(sys.executable).parent / 'example.png'
+				if not example_img_path.exists():
+					example_img_path = Path(sys._MEIPASS) / 'example.png'
+			else:
+				# Running as script - image is in project root
+				example_img_path = Path(__file__).parent / 'example.png'
+			
+			if example_img_path.exists():
+				try:
+					from PIL import Image, ImageTk
+					img = Image.open(example_img_path)
+					# Resize image to fit (max width 600px, maintain aspect ratio)
+					max_width = 600
+					if img.width > max_width:
+						ratio = max_width / img.width
+						new_height = int(img.height * ratio)
+						img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+					
+					photo = ImageTk.PhotoImage(img)
+					img_label = tk.Label(s3, image=photo)
+					img_label.image = photo  # Keep a reference
+					img_label.pack(padx=12, pady=(0, 6))
+				except ImportError:
+					# PIL not available, try tkinter's built-in PhotoImage
+					try:
+						photo = tk.PhotoImage(file=str(example_img_path))
+						img_label = tk.Label(s3, image=photo)
+						img_label.image = photo  # Keep a reference
+						img_label.pack(padx=12, pady=(0, 6))
+					except Exception:
+						pass
+		except Exception as e:
+			# If image loading fails, just skip it
+			print(f"[DEBUG] Could not load example image: {e}")
 		
 		# Open work folder button
 		s3_btn_frame = self._frame(s3)
