@@ -348,10 +348,11 @@ class WizardApp:
 		try:
 			# Handle both development and PyInstaller bundled mode
 			if getattr(sys, 'frozen', False):
-				# Running as compiled exe - image is in _MEIPASS or same directory as exe
-				example_img_path = Path(sys.executable).parent / 'example.png'
+				# Running as compiled exe - image is bundled in _MEIPASS
+				example_img_path = Path(sys._MEIPASS) / 'example.png'
+				# Fallback: check same directory as exe (in case user placed it there)
 				if not example_img_path.exists():
-					example_img_path = Path(sys._MEIPASS) / 'example.png'
+					example_img_path = Path(sys.executable).parent / 'example.png'
 			else:
 				# Running as script - image is in project root
 				example_img_path = Path(__file__).parent / 'example.png'
@@ -1766,6 +1767,19 @@ class WizardApp:
 			self.entry_prefix = {}
 			self.entry_name = {}
 			self.linked_bins = {}
+			self._long_path_logs = set()  # Track paths we've already warned about
+		
+		def _win_safe_path(self, path: str) -> str:
+			"""Return a path that works with Windows MAX_PATH limits."""
+			if os.name == 'nt':
+				abs_path = os.path.abspath(path)
+				if len(abs_path) >= 260 and not abs_path.startswith('\\\\?\\'):
+					if abs_path not in self._long_path_logs:
+						print(f"[DEBUG] Applying long-path prefix due to length {len(abs_path)}: {abs_path}")
+						self._long_path_logs.add(abs_path)
+					return '\\\\?\\' + abs_path
+				return abs_path
+			return path
 		
 		def _is_valid_binary_bin(self, bin_path: Path) -> bool:
 			"""
@@ -2008,15 +2022,30 @@ class WizardApp:
 						continue
 					source_file = self.source_files[unify_file][0]
 					output_file = os.path.join(output_dir, short_file.lower())
-					if len(os.path.basename(output_file)) > 255:
+					output_file_abs = os.path.abspath(output_file)
+					# Windows paths longer than 260 characters fail without long-path support.
+					# Fallback to hashed filename when either the basename or full path is too long.
+					if len(os.path.basename(output_file)) > 255 or len(output_file_abs) >= 250:
 						extension = os.path.splitext(short_file)[1]
 						basename = self._py.wad.WADHasher.raw_to_hex(short_file)
 						if extension != '':
 							basename += extension
 						output_file = os.path.join(output_dir, basename)
+						output_file_abs = os.path.abspath(output_file)
+						msg = (
+							f"[DEBUG] Output path too long (basename={len(os.path.basename(output_file_abs))}, "
+							f"full={len(output_file_abs)}). Using hashed filename: {basename}"
+						)
+						print(msg)
 					# copy
-					os.makedirs(os.path.dirname(output_file), exist_ok=True)
-					shutil.copy(source_file, output_file)
+					target_dir = os.path.dirname(output_file)
+					os.makedirs(self._win_safe_path(target_dir), exist_ok=True)
+					try:
+						shutil.copy(self._win_safe_path(source_file), self._win_safe_path(output_file))
+					except FileNotFoundError as copy_err:
+						print(f"[ERROR] Copy failed for {source_file} -> {output_file}: {copy_err}")
+						print(f"[ERROR] Source exists: {os.path.exists(source_file)}, target dir exists: {os.path.isdir(target_dir)}")
+						raise
 					# bum inside bins
 					if output_file.endswith('.bin'):
 						bum_bin(output_file)
