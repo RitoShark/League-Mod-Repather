@@ -3,6 +3,85 @@ from .helper import FNV1a
 from .wad import WADHasher
 from enum import Enum
 
+
+class DuplicatePreservingMap:
+	"""
+	Custom map class that preserves duplicate keys (unlike Python dicts).
+	Stores data as list of (key, value) tuples internally, but provides
+	dict-like interface for backward compatibility.
+	"""
+	def __init__(self, items=None):
+		"""Initialize with list of (key, value) tuples or dict-like object."""
+		if items is None:
+			self._items = []
+		elif isinstance(items, dict):
+			# Convert dict to list of tuples (will lose duplicates if dict already had them)
+			self._items = list(items.items())
+		elif isinstance(items, list):
+			# Assume it's already a list of tuples
+			self._items = items if all(isinstance(x, tuple) and len(x) == 2 for x in items) else []
+		else:
+			self._items = list(items) if hasattr(items, '__iter__') else []
+	
+	def items(self):
+		"""Return all (key, value) pairs, including duplicates."""
+		return self._items
+	
+	def keys(self):
+		"""Return all keys, including duplicates."""
+		return [key for key, value in self._items]
+	
+	def values(self):
+		"""Return all values."""
+		return [value for key, value in self._items]
+	
+	def get(self, key, default=None):
+		"""Get the LAST value for a key (dict-like behavior for compatibility)."""
+		for k, v in reversed(self._items):
+			if k == key:
+				return v
+		return default
+	
+	def __getitem__(self, key):
+		"""Get the LAST value for a key (dict-like behavior)."""
+		result = self.get(key)
+		if result is None:
+			raise KeyError(key)
+		return result
+	
+	def __setitem__(self, key, value):
+		"""Add or replace the LAST occurrence of a key."""
+		# Find last occurrence and replace, or append if not found
+		for i in range(len(self._items) - 1, -1, -1):
+			if self._items[i][0] == key:
+				self._items[i] = (key, value)
+				return
+		# Not found, append
+		self._items.append((key, value))
+	
+	def __len__(self):
+		"""Return number of key-value pairs."""
+		return len(self._items)
+	
+	def __iter__(self):
+		"""Iterate over keys (may include duplicates)."""
+		return iter(self.keys())
+	
+	def __contains__(self, key):
+		"""Check if key exists."""
+		return any(k == key for k, v in self._items)
+	
+	def __repr__(self):
+		return f"DuplicatePreservingMap({self._items})"
+	
+	def add(self, key, value):
+		"""Add a new key-value pair (always appends, even if key exists)."""
+		self._items.append((key, value))
+	
+	def get_all(self, key):
+		"""Get ALL values for a key (returns list)."""
+		return [value for k, value in self._items if k == key]
+
 class BINType(Enum):
     # basic
     NONE = 0
@@ -111,9 +190,19 @@ class BINHasher:
                 for f in field.data:
                     BINHasher.un_hash_field(hashtables, f)
         elif field.type == BINType.MAP:
-            field.data = {
-                BINHasher.un_hash_value(hashtables, key, field.key_type): BINHasher.un_hash_value(hashtables, value, field.value_type) for key, value in field.data.items()
-            }
+            # Preserve duplicates when un-hashing
+            if isinstance(field.data, DuplicatePreservingMap):
+                unhashed_items = [
+                    (BINHasher.un_hash_value(hashtables, key, field.key_type),
+                     BINHasher.un_hash_value(hashtables, value, field.value_type))
+                    for key, value in field.data.items()
+                ]
+                field.data = DuplicatePreservingMap(unhashed_items)
+            else:
+                # Fallback for regular dict
+                field.data = {
+                    BINHasher.un_hash_value(hashtables, key, field.key_type): BINHasher.un_hash_value(hashtables, value, field.value_type) for key, value in field.data.items()
+                }
         else:
             field.data = BINHasher.un_hash_value(hashtables, field.data, field.type)
 
@@ -210,10 +299,14 @@ class BINReader:
         field.value_type = BINType.fix(bs, bs.read_u8()[0])
         bs.pad(4)  # size
         count, = bs.read_u32()
-        field.data = {
-            BINReader.read_value(bs, field.key_type): BINReader.read_value(bs, field.value_type)
-            for i in range(count)
-        }
+        # Use DuplicatePreservingMap to preserve duplicate keys
+        # Read all key-value pairs into a list first
+        items = []
+        for i in range(count):
+            key = BINReader.read_value(bs, field.key_type)
+            value = BINReader.read_value(bs, field.value_type)
+            items.append((key, value))
+        field.data = DuplicatePreservingMap(items)
         return field
     
     read_field_dict = {
@@ -343,8 +436,17 @@ class BINWriter:
         size += 1+1+4
 
         content_size = 4
-        bs.write_u32(len(field.data))
-        for key, value in field.data.items():
+        # Handle both DuplicatePreservingMap and regular dict for backward compatibility
+        if isinstance(field.data, DuplicatePreservingMap):
+            items = field.data.items()
+        elif isinstance(field.data, dict):
+            items = field.data.items()
+        else:
+            # Fallback: try to iterate
+            items = field.data.items() if hasattr(field.data, 'items') else []
+        
+        bs.write_u32(len(items))
+        for key, value in items:
             content_size += BINWriter.write_value(bs,
                                                     key, field.key_type, header_size=False)
             content_size += BINWriter.write_value(bs,
