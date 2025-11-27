@@ -1983,14 +1983,34 @@ class WizardApp:
 				elif field.type == self._py.bin.BINType.MAP:
 					# FIXED: Duplicate map keys are now preserved using DuplicatePreservingMap.
 					# All key-value pairs (including duplicates) are processed and repathed.
+					# IMPORTANT: We must deep copy POINTER/EMBED values before modifying them,
+					# otherwise duplicate keys sharing the same value object will interfere with each other.
 					original_map_size = len(field.data) if field.data else 0
 					# Process all items, preserving duplicates
 					if isinstance(field.data, self._py.bin.DuplicatePreservingMap):
-						# Use DuplicatePreservingMap to preserve duplicates after repathing
-						repathed_items = [
-							(bum_value(key, field.key_type, entry_hash), bum_value(value, field.value_type, entry_hash))
-							for key, value in field.data.items()
-						]
+						# IMPORTANT: For POINTER/EMBED values, we must copy them before modifying
+						# because bum_value modifies values in-place. If duplicate keys share
+						# the same value object, modifying one will affect the other.
+						import copy
+						
+						# Process all items, copying POINTER/EMBED values before modifying
+						repathed_items = []
+						for key, value in field.data.items():
+							# Repath the key
+							repathed_key = bum_value(key, field.key_type, entry_hash)
+							
+							# For POINTER/EMBED values, deep copy before modifying to avoid
+							# modifying shared objects when we have duplicate keys
+							if field.value_type in (self._py.bin.BINType.POINTER, self._py.bin.BINType.EMBED):
+								# Use deepcopy to create independent copy
+								value_copy = copy.deepcopy(value)
+								repathed_value = bum_value(value_copy, field.value_type, entry_hash)
+							else:
+								# For non-pointer/embed types, safe to modify in place
+								repathed_value = bum_value(value, field.value_type, entry_hash)
+							
+							repathed_items.append((repathed_key, repathed_value))
+						
 						field.data = self._py.bin.DuplicatePreservingMap(repathed_items)
 					else:
 						# Fallback for regular dict (backward compatibility)
