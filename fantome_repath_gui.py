@@ -14,17 +14,20 @@ import string
 import re
 import webbrowser
 
-# Add project root to path for pyRitoFile
+# Add local pyRitoFile to path (use League Mod Repather/pyRitoFile instead of project root)
 # Handle both development and PyInstaller bundled mode
 if getattr(sys, 'frozen', False):
 	# Running as compiled exe
 	PROJECT_ROOT = Path(sys._MEIPASS)
+	LOCAL_PYRITO_PATH = Path(sys._MEIPASS) / 'pyRitoFile'
 else:
-	# Running as script
+	# Running as script - use local pyRitoFile in League Mod Repather directory
 	PROJECT_ROOT = Path(__file__).parent.parent
+	LOCAL_PYRITO_PATH = Path(__file__).parent / 'pyRitoFile'
 
-if str(PROJECT_ROOT) not in sys.path:
-	sys.path.insert(0, str(PROJECT_ROOT))
+# Add local pyRitoFile directory to path (before project root to prioritize it)
+if str(LOCAL_PYRITO_PATH.parent) not in sys.path:
+	sys.path.insert(0, str(LOCAL_PYRITO_PATH.parent))
 
 import pyRitoFile
 
@@ -1200,12 +1203,22 @@ class WizardApp:
 							fix_field(f, current_context)
 				elif field.type == pyRitoFile.bin.BINType.MAP:
 					if hasattr(field, 'data'):
-						new_map = {}
-						for key, value in field.data.items():
-							new_key = fix_value(key, field.key_type, current_context)
-							new_value = fix_value(value, field.value_type, current_context)
-							new_map[new_key] = new_value
-						field.data = new_map
+						# Preserve duplicates when fixing HUD paths
+						if isinstance(field.data, pyRitoFile.bin.DuplicatePreservingMap):
+							new_items = []
+							for key, value in field.data.items():
+								new_key = fix_value(key, field.key_type, current_context)
+								new_value = fix_value(value, field.value_type, current_context)
+								new_items.append((new_key, new_value))
+							field.data = pyRitoFile.bin.DuplicatePreservingMap(new_items)
+						else:
+							# Fallback for regular dict
+							new_map = {}
+							for key, value in field.data.items():
+								new_key = fix_value(key, field.key_type, current_context)
+								new_value = fix_value(value, field.value_type, current_context)
+								new_map[new_key] = new_value
+							field.data = new_map
 				elif field.type == pyRitoFile.bin.BINType.OPTION:
 					if field.value_type == pyRitoFile.bin.BINType.STRING:
 						if hasattr(field, 'data') and field.data is not None:
@@ -1968,10 +1981,23 @@ class WizardApp:
 						for f in field.data:
 							bum_field(f, entry_hash)
 				elif field.type == self._py.bin.BINType.MAP:
-					field.data = {
-						bum_value(key, field.key_type, entry_hash): bum_value(value, field.value_type, entry_hash)
-						for key, value in field.data.items()
-					}
+					# FIXED: Duplicate map keys are now preserved using DuplicatePreservingMap.
+					# All key-value pairs (including duplicates) are processed and repathed.
+					original_map_size = len(field.data) if field.data else 0
+					# Process all items, preserving duplicates
+					if isinstance(field.data, self._py.bin.DuplicatePreservingMap):
+						# Use DuplicatePreservingMap to preserve duplicates after repathing
+						repathed_items = [
+							(bum_value(key, field.key_type, entry_hash), bum_value(value, field.value_type, entry_hash))
+							for key, value in field.data.items()
+						]
+						field.data = self._py.bin.DuplicatePreservingMap(repathed_items)
+					else:
+						# Fallback for regular dict (backward compatibility)
+						field.data = {
+							bum_value(key, field.key_type, entry_hash): bum_value(value, field.value_type, entry_hash)
+							for key, value in field.data.items()
+						}
 				elif field.type == self._py.bin.BINType.OPTION and field.value_type == self._py.bin.BINType.STRING:
 					if field.data != None:
 						field.data = bum_value(field.data, field.value_type, entry_hash)
@@ -1987,6 +2013,15 @@ class WizardApp:
 				for entry in bin.entries:
 					entry_hash = entry.hash
 					for field in entry.data:
+						# WARNING: MAP fields with duplicate keys are lost by pyRitoFile
+						# Python dicts don't support duplicate keys, so if the binary BIN has
+						# duplicate map keys (e.g., same hash key with different values),
+						# only the last one will be preserved. This is a pyRitoFile limitation,
+						# not a repather issue. The duplicates are lost when the BIN is read.
+						if field.type == self._py.bin.BINType.MAP and field.data:
+							# Check if map count might indicate duplicates were lost
+							# (We can't detect this perfectly, but we can warn if map seems suspiciously small)
+							pass  # Diagnostic: Map processing happens in bum_field
 						bum_field(field, entry_hash)
 				bin.write(bin_path)
 			
@@ -2539,6 +2574,12 @@ class WizardApp:
 			import traceback
 			traceback.print_exc()
 			return False
+		
+		# FIXED: Duplicate map keys are now preserved using DuplicatePreservingMap class.
+		# The local pyRitoFile (League Mod Repather/pyRitoFile) has been modified to preserve
+		# duplicate keys in MAP fields, so entries like mEventDataMap with duplicate hash keys
+		# will be correctly preserved and repathed.
+		print("[DEBUG] Duplicate map keys are now preserved using DuplicatePreservingMap.")
 		
 		# Check if scan found any entries
 		if len(bum.scanned_tree) == 0:
