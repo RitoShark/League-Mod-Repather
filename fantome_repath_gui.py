@@ -48,7 +48,7 @@ class WizardApp:
 	def __init__(self, root: tk.Tk):
 		self.root = root
 		self.root.title(APP_TITLE)
-		self.root.geometry("900x560")
+		self.root.geometry("900x800")  # Increased height to accommodate more UI elements
 
 		# State
 		self.champions_dir = tk.StringVar()
@@ -59,7 +59,9 @@ class WizardApp:
 		self.hash_status = tk.StringVar(value="Checking hashes...")
 		self.custom_prefix = tk.StringVar()  # Custom prefix for repathing
 		self.no_skin_lite_enabled = tk.BooleanVar(value=False)  # No Skin Lite checkbox
+		self.nuke_materials_enabled = tk.BooleanVar(value=False)  # Nuke Materials checkbox
 		self.merge_linked_bins_enabled = tk.BooleanVar(value=True)  # Merge Linked BINs checkbox (enabled by default)
+		self.fix_tex_dimensions_enabled = tk.BooleanVar(value=False)  # Fix TEX dimensions checkbox (disabled by default)
 		self.bulk_fantome_paths = []  # List of fantome paths for bulk processing
 
 		# internal: store full member path inside .fantome
@@ -153,6 +155,26 @@ class WizardApp:
 		)
 		messagebox.showinfo("No Skin Lite Info", info_text)
 	
+	def _show_fix_tex_dimensions_info(self):
+		"""Show information about Fix TEX Dimensions feature"""
+		info_text = (
+			"Fix TEX Dimensions Feature\n\n"
+			"What it does:\n"
+			"• Scans all .tex files in your mod\n"
+			"• Checks if dimensions are divisible by 4\n"
+			"• Auto-fixes invalid dimensions to nearest valid size\n\n"
+			"Examples of fixes:\n"
+			"• 257x257 → 256x256\n"
+			"• 513x256 → 512x256\n"
+			"• 1025x1025 → 1024x1024\n\n"
+			"Why this is needed:\n"
+			"• League crashes with textures not divisible by 4\n"
+			"• Some mods have broken .tex files\n"
+			"• This prevents in-game crashes\n\n"
+			"Recommended: Keep this enabled for safety!"
+		)
+		messagebox.showinfo("Fix TEX Dimensions Info", info_text)
+	
 	def _show_merge_linked_bins_info(self):
 		"""Show information about Merge Linked BINs feature"""
 		info_text = (
@@ -224,6 +246,13 @@ class WizardApp:
 		e1 = self._entry(row1, textvariable=self.champions_dir, width=80)
 		e1.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
 		self._button(row1, text="Browse", command=self._pick_champions_dir).pack(side=tk.LEFT)
+		
+		# Add help text for Champions folder
+		help_frame = self._frame(s1)
+		help_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
+		help_text = "Select your League of Legends Champions folder (e.g., C:/Riot Games/League of Legends/Game/DATA/FINAL/Champions)"
+		help_label = tk.Label(help_frame, text=help_text, font=('Arial', 8), fg='gray')
+		help_label.pack(anchor=tk.W)
 
 		row2 = self._frame(s1)
 		row2.pack(fill=tk.X, padx=12, pady=6)
@@ -269,6 +298,25 @@ class WizardApp:
 		                            font=('Arial', 8), foreground='gray')
 		no_skin_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 		
+		# Nuke Materials checkbox with info icon
+		row4b = self._frame(s1)
+		row4b.pack(fill=tk.X, padx=12, pady=6)
+		
+		if tb:
+			nuke_materials_checkbox = tb.Checkbutton(row4b, text="Nuke Materials (crash fix)", variable=self.nuke_materials_enabled)
+		else:
+			nuke_materials_checkbox = tk.Checkbutton(row4b, text="Nuke Materials (crash fix)", variable=self.nuke_materials_enabled)
+		nuke_materials_checkbox.pack(side=tk.LEFT)
+		
+		# Info button with tooltip
+		nuke_materials_info_btn = self._button(row4b, text="ℹ️", width=3, command=self._show_nuke_materials_info)
+		nuke_materials_info_btn.pack(side=tk.LEFT, padx=4)
+		
+		# Hint label for Nuke Materials
+		nuke_materials_hint = self._label(s1, text="💡 Removes StaticMaterialDef entries and replaces material links with direct texture paths - can fix crash (yasuo, zed etc.)", 
+		                                  font=('Arial', 8), foreground='gray')
+		nuke_materials_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+		
 		# Merge Linked BINs checkbox with info icon
 		row5 = self._frame(s1)
 		row5.pack(fill=tk.X, padx=12, pady=6)
@@ -287,6 +335,25 @@ class WizardApp:
 		merge_linked_hint = self._label(s1, text="💡 Adds linked BIN paths from fresh game files to mod BIN - can repair broken skins that cause crashes (e.g., Yone E)", 
 		                                 font=('Arial', 8), foreground='gray')
 		merge_linked_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
+		
+		# Fix TEX Dimensions checkbox with info icon
+		row6 = self._frame(s1)
+		row6.pack(fill=tk.X, padx=12, pady=6)
+		
+		if tb:
+			fix_tex_checkbox = tb.Checkbutton(row6, text="Fix TEX Dimensions (Crash Fix)", variable=self.fix_tex_dimensions_enabled)
+		else:
+			fix_tex_checkbox = tk.Checkbutton(row6, text="Fix TEX Dimensions (Crash Fix)", variable=self.fix_tex_dimensions_enabled)
+		fix_tex_checkbox.pack(side=tk.LEFT)
+		
+		# Info button with tooltip
+		fix_tex_info_btn = self._button(row6, text="ℹ️", width=3, command=self._show_fix_tex_dimensions_info)
+		fix_tex_info_btn.pack(side=tk.LEFT, padx=4)
+		
+		# Hint label for Fix TEX Dimensions
+		fix_tex_hint = self._label(s1, text="💡 Fixes .tex files with dimensions not divisible by 4 (e.g., 257x257 → 256x256) - prevents crashes", 
+		                            font=('Arial', 8), foreground='gray')
+		fix_tex_hint.pack(anchor=tk.W, padx=12, pady=(0, 6))
 
 		self.steps.append(s1)
 
@@ -503,7 +570,7 @@ class WizardApp:
 			messagebox.showinfo(APP_TITLE, "All done! You can now close the wizard or re-run the process.")
 
 	def _pick_champions_dir(self):
-		path = filedialog.askdirectory(title="Select Champions folder")
+		path = filedialog.askdirectory(title="Select League of Legends Champions folder\n(e.g., C:\\Riot Games\\League of Legends\\Game\\DATA\\Characters)")
 		if path:
 			self.champions_dir.set(path)
 			self._save_config()
@@ -581,7 +648,7 @@ class WizardApp:
 		mod_folder = self.mod_folder_path.get().strip()
 		
 		if not champs or not os.path.isdir(champs):
-			messagebox.showerror(APP_TITLE, "Please select a valid Champions folder.")
+			messagebox.showerror(APP_TITLE, "Please select a valid League of Legends Champions folder.\n\nExample: C:\\Riot Games\\League of Legends\\Game\\DATA\\Characters")
 			return False
 		# persist on successful validation of champs path
 		try:
@@ -623,6 +690,29 @@ class WizardApp:
 			return False
 		
 		return True
+	
+	def _show_nuke_materials_info(self):
+		"""Show information about Nuke Materials feature"""
+		info_text = (
+			"Nuke Materials Feature\n\n"
+			"When enabled, this will:\n"
+			"• Find all StaticMaterialDef entries in BIN files\n"
+			"• Extract their diffuse texture paths\n"
+			"• Replace material: link fields with texture: string fields\n"
+			"• Remove all StaticMaterialDef entries\n\n"
+			"Benefits:\n"
+			"• Reduces BIN file size\n"
+			"• Simplifies material structure\n"
+			"• Removes unused material definitions\n"
+			"• Direct texture references instead of material links\n\n"
+			"How it works:\n"
+			"• Scans for StaticMaterialDef in all BIN files\n"
+			"• Finds Diffuse_Texture path in each material\n"
+			"• Replaces material links with direct texture paths\n"
+			"• Deletes the material definitions\n\n"
+			"💡 Safe to use - only affects material definitions and links"
+		)
+		messagebox.showinfo("Nuke Materials Info", info_text)
 
 	# ---------- Step 2: Detection & Extraction ----------
 	def _project_root(self) -> Path:
@@ -1119,13 +1209,31 @@ class WizardApp:
 		Returns None if not found.
 		"""
 		wad_lower = wad_name.lower()
+		print(f"\n{'='*60}")
 		print(f"[DEBUG _find_fresh_wad] Looking for: {wad_name} (lowercase: {wad_lower})")
 		print(f"[DEBUG _find_fresh_wad] Champions dir: {champions_dir}")
+		print(f"[DEBUG _find_fresh_wad] Champions dir exists: {champions_dir.exists()}")
+		
+		if not champions_dir.exists():
+			print(f"[ERROR] Champions directory does not exist!")
+			return None
+		
+		# Check if we can read the directory
+		try:
+			dir_contents = list(champions_dir.iterdir())
+			print(f"[DEBUG _find_fresh_wad] Champions dir has {len(dir_contents)} items")
+			# Show first few items
+			if dir_contents:
+				print(f"[DEBUG _find_fresh_wad] First few items: {[str(x.name) for x in dir_contents[:5]]}")
+		except Exception as e:
+			print(f"[ERROR] Cannot read Champions directory: {e}")
+			return None
 		
 		# Extract champion name from the wad filename (e.g., "sivir" from "sivir.wad.client")
 		# Pattern: championname.wad.client
 		if not wad_lower.endswith('.wad.client'):
 			# If it doesn't end with .wad.client, just do exact match
+			print(f"[DEBUG _find_fresh_wad] Using exact match (not .wad.client)")
 			for root, _dirs, files in os.walk(champions_dir):
 				for f in files:
 					if f.lower() == wad_lower:
@@ -1141,18 +1249,29 @@ class WizardApp:
 		# Look for exact match: championname.wad.client (no language code)
 		target_name = f"{champ_name}.wad.client"
 		print(f"[DEBUG _find_fresh_wad] Target name: {target_name}")
+		print(f"[DEBUG _find_fresh_wad] Starting directory walk...")
 		
+		found_wads = []
 		for root, _dirs, files in os.walk(champions_dir):
 			for f in files:
+				if f.lower().endswith('.wad.client'):
+					found_wads.append(f)
 				f_lower = f.lower()
 				# Must match exactly: championname.wad.client
 				# Reject: championname.en_us.wad.client, championname.ja_jp.wad.client, etc.
 				if f_lower == target_name:
 					found = Path(root) / f
-					print(f"[DEBUG _find_fresh_wad] FOUND: {found}")
+					print(f"[DEBUG _find_fresh_wad] ✓ FOUND: {found}")
+					print(f"{'='*60}\n")
 					return found
 		
-		print(f"[DEBUG _find_fresh_wad] NOT FOUND after walking directory")
+		print(f"[DEBUG _find_fresh_wad] ✗ NOT FOUND after walking directory")
+		print(f"[DEBUG _find_fresh_wad] Found {len(found_wads)} total .wad.client files:")
+		for wad in found_wads[:10]:  # Show first 10
+			print(f"  - {wad}")
+		if len(found_wads) > 10:
+			print(f"  ... and {len(found_wads) - 10} more")
+		print(f"{'='*60}\n")
 		return None
 
 	def _try_extract_wad(self, wad_path: Path, out_dir: Path, hashes_dir: Path) -> bool:
@@ -2518,6 +2637,156 @@ class WizardApp:
 					os.rmdir(root)
 			print(f'bumpath: Finish: Bum {output_dir}.')
 
+	def _fix_tex_dimensions(self, mod_dir: Path) -> dict:
+		"""
+		Scan and fix .tex files with dimensions not divisible by 4.
+		Properly crops texture data to match new dimensions.
+		Returns dict with stats: {'total_tex': int, 'fixed': int, 'errors': list}
+		"""
+		import sys
+		sys.path.insert(0, str(self._project_root()))
+		import pyRitoFile
+		from pyRitoFile.tex import TEX, TEXFormat
+		
+		stats = {'total_tex': 0, 'fixed': 0, 'errors': []}
+		
+		print(f"\n{'='*60}")
+		print(f"[TEX DIMENSION FIX] Scanning mod directory: {mod_dir}")
+		print(f"{'='*60}")
+		
+		# Find all .tex files
+		tex_files = []
+		for root, dirs, files in os.walk(mod_dir):
+			for file in files:
+				if file.lower().endswith('.tex'):
+					tex_files.append(Path(root) / file)
+		
+		stats['total_tex'] = len(tex_files)
+		print(f"[TEX DIMENSION FIX] Found {len(tex_files)} .tex files")
+		
+		if len(tex_files) == 0:
+			print(f"[TEX DIMENSION FIX] No .tex files found, skipping")
+			return stats
+		
+		for tex_path in tex_files:
+			try:
+				# Read the .tex file
+				tex = TEX()
+				tex.read(str(tex_path))
+				
+				original_width = tex.width
+				original_height = tex.height
+				
+				# Check if dimensions are divisible by 4
+				needs_fix = (original_width % 4 != 0) or (original_height % 4 != 0)
+				
+				if needs_fix:
+					# Round DOWN to nearest multiple of 4
+					new_width = (original_width // 4) * 4
+					new_height = (original_height // 4) * 4
+					
+					# Ensure minimum size of 4x4
+					new_width = max(4, new_width)
+					new_height = max(4, new_height)
+					
+					print(f"[TEX DIMENSION FIX] Fixing: {tex_path.name}")
+					print(f"  Format: {tex.format.name}, Mipmaps: {tex.mipmaps}")
+					print(f"  Before: {original_width}x{original_height}")
+					print(f"  After:  {new_width}x{new_height}")
+					
+					# Fix the texture data to match new dimensions
+					# Use EXACT same calculation method as pyRitoFile.tex.TEX.read() and TEX.write()
+					if len(tex.data) == 0:
+						raise Exception("No texture data found")
+					
+					# Determine format parameters (same as TEX.read())
+					if tex.format == TEXFormat.DXT1:
+						block_size = 4
+						bytes_per_block = 8
+					elif tex.format == TEXFormat.DXT5:
+						block_size = 4
+						bytes_per_block = 16
+					elif tex.format == TEXFormat.BGRA8:
+						block_size = 1
+						bytes_per_block = 4
+					else:
+						# Unknown format - skip fixing data
+						print(f"  Warning: Format {tex.format.name} not supported for data cropping")
+						tex.width = new_width
+						tex.height = new_height
+						tex.write(str(tex_path))
+						stats['fixed'] += 1
+						continue
+					
+					# Calculate block dimensions using EXACT same formula as TEX.read() line 67-70
+					# Original dimensions (may not be divisible by 4)
+					orig_block_width = (original_width + block_size - 1) // block_size
+					orig_block_height = (original_height + block_size - 1) // block_size
+					orig_row_size = bytes_per_block * orig_block_width
+					orig_total_size = bytes_per_block * orig_block_width * orig_block_height
+					
+					# New dimensions (divisible by 4)
+					new_block_width = (new_width + block_size - 1) // block_size  # Same formula for consistency
+					new_block_height = (new_height + block_size - 1) // block_size
+					new_row_size = bytes_per_block * new_block_width
+					new_total_size = bytes_per_block * new_block_width * new_block_height
+					
+					# Get source data - for mipmaps, data[-1] is the largest (level 0), data[0] is smallest
+					if tex.mipmaps and len(tex.data) > 1:
+						source_data = tex.data[-1]  # Largest mipmap (level 0)
+					else:
+						source_data = tex.data[0]
+					
+					# Crop the data: take top-left portion
+					# Data is stored row by row: each row is (block_width * bytes_per_block) bytes
+					cropped = bytearray()
+					rows_cropped = 0
+					for row in range(new_block_height):
+						start_offset = row * orig_row_size
+						end_offset = start_offset + new_row_size
+						if end_offset > len(source_data):
+							print(f"  Warning: Row {row} would exceed data size, stopping")
+							break
+						cropped.extend(source_data[start_offset:end_offset])
+						rows_cropped += 1
+					
+					# Verify cropped size matches expected
+					if len(cropped) != new_total_size:
+						print(f"  Warning: Cropped size {len(cropped)} doesn't match expected {new_total_size}")
+						# Pad or truncate to match expected size
+						if len(cropped) < new_total_size:
+							cropped.extend(b'\x00' * (new_total_size - len(cropped)))
+						else:
+							cropped = cropped[:new_total_size]
+					
+					# Update texture: use cropped data, disable mipmaps
+					tex.data = [bytes(cropped)]
+					tex.mipmaps = False
+					
+					# Update dimensions
+					tex.width = new_width
+					tex.height = new_height
+					
+					# Write back the fixed .tex file
+					tex.write(str(tex_path))
+					stats['fixed'] += 1
+					print(f"  ✓ Fixed successfully")
+					
+			except Exception as e:
+				error_msg = f"{tex_path.name}: {str(e)}"
+				stats['errors'].append(error_msg)
+				print(f"[TEX DIMENSION FIX] Error processing {tex_path.name}: {e}")
+				import traceback
+				traceback.print_exc()
+		
+		print(f"\n[TEX DIMENSION FIX] Summary:")
+		print(f"  Total .tex files: {stats['total_tex']}")
+		print(f"  Fixed: {stats['fixed']}")
+		print(f"  Errors: {len(stats['errors'])}")
+		print(f"{'='*60}\n")
+		
+		return stats
+	
 	def _apply_no_skin_lite_to_wad(self, repathed_dir: Path):
 		"""
 		Apply No Skin Lite: Copy the main skin BIN to all other skin slots (skin0-skin99).
@@ -3117,23 +3386,85 @@ class WizardApp:
 		Only considers champions that exist in the Champions folder (ignoring subfolders like annietibbers).
 		"""
 		try:
+			print(f"[DEBUG] Detecting champion from folder: {mod_folder}")
+			print(f"[DEBUG] Champions directory: {champs_dir}")
+			
+			# First, let's see everything in the mod folder
+			print(f"[DEBUG] === Mod Folder Structure ===")
+			try:
+				for item in mod_folder.iterdir():
+					item_type = "DIR" if item.is_dir() else "FILE"
+					# Check for special attributes (symlink, junction, OneDrive placeholder)
+					is_symlink = item.is_symlink()
+					try:
+						import stat
+						# Check if it's a reparse point (junction/symlink on Windows)
+						is_reparse = bool(item.stat().st_file_attributes & 0x400) if hasattr(item.stat(), 'st_file_attributes') else False
+					except:
+						is_reparse = False
+					
+					extra_info = []
+					if is_symlink:
+						extra_info.append("SYMLINK")
+					if is_reparse:
+						extra_info.append("REPARSE_POINT")
+					
+					extra = f" [{', '.join(extra_info)}]" if extra_info else ""
+					print(f"[DEBUG]   {item_type}: {item.name}{extra}")
+			except Exception as e:
+				print(f"[DEBUG] Error reading mod folder: {e}")
+				import traceback
+				traceback.print_exc()
+			print(f"[DEBUG] === End Mod Folder Structure ===")
+			
 			# Look for data/characters/{champ}/ structure
 			characters_path = mod_folder / 'data' / 'characters'
 			if not characters_path.exists():
+				print(f"[DEBUG] Exact path not found, trying case-insensitive search...")
 				# Try case-insensitive search
+				data_folder = None
 				for item in mod_folder.iterdir():
 					if item.is_dir() and item.name.lower() == 'data':
-						for subitem in item.iterdir():
+						data_folder = item
+						print(f"[DEBUG] Found 'data' folder: {data_folder}")
+						print(f"[DEBUG] data_folder.exists(): {data_folder.exists()}")
+						print(f"[DEBUG] data_folder.is_dir(): {data_folder.is_dir()}")
+						
+						# Try to read the contents with error handling
+						try:
+							data_contents = list(data_folder.iterdir())
+							print(f"[DEBUG] Contents of data folder ({len(data_contents)} items): {data_contents}")
+						except PermissionError as e:
+							print(f"[ERROR] Permission denied when reading data folder: {e}")
+							print(f"[ERROR] This might be an OneDrive or permissions issue!")
+							return ""
+						except Exception as e:
+							print(f"[ERROR] Could not read data folder: {e}")
+							import traceback
+							traceback.print_exc()
+							return ""
+						
+						for subitem in data_contents:
+							print(f"[DEBUG]   - Checking: {subitem.name} (is_dir: {subitem.is_dir()}, lowercase: {subitem.name.lower()})")
 							if subitem.is_dir() and subitem.name.lower() == 'characters':
 								characters_path = subitem
+								print(f"[DEBUG] ✓ Found characters path: {characters_path}")
 								break
 						break
+				
+				if data_folder is None:
+					print(f"[DEBUG] No 'data' folder found in mod folder")
+				elif characters_path is None or not characters_path.exists():
+					print(f"[DEBUG] 'data' folder exists but no 'characters' subfolder found")
 			
 			if not characters_path or not characters_path.exists():
+				print(f"[DEBUG] Could not find data/characters/ folder in mod")
+				print(f"[DEBUG] Mod folder contents: {list(mod_folder.iterdir())}")
 				return ""
 			
 			# Get all champion folders
 			champ_folders = [d.name.lower() for d in characters_path.iterdir() if d.is_dir()]
+			print(f"[DEBUG] Found champion folders in mod: {champ_folders}")
 			
 			# Filter to only champions that exist in the Champions folder
 			# (this excludes subfolders like annietibbers, lantern, etc.)
@@ -3141,16 +3472,25 @@ class WizardApp:
 			for champ_folder in champ_folders:
 				wad_name = f"{champ_folder}.wad.client"
 				matching_wad = self._find_fresh_wad(champs_dir, wad_name)
+				print(f"[DEBUG] Checking {wad_name}: {'FOUND' if matching_wad and matching_wad.exists() else 'NOT FOUND'}")
 				if matching_wad and matching_wad.exists():
 					valid_champs.append(champ_folder)
+			
+			print(f"[DEBUG] Valid champions (exist in Champions folder): {valid_champs}")
 			
 			# Return the first valid champion found
 			if valid_champs:
 				return valid_champs[0]
 			
+			print(f"[DEBUG] No valid champions found. Possible reasons:")
+			print(f"[DEBUG] 1. Champions folder path is incorrect")
+			print(f"[DEBUG] 2. Champion .wad.client files not found in Champions folder")
+			print(f"[DEBUG] 3. Mod folder structure doesn't match expected pattern")
 			return ""
 		except Exception as e:
 			print(f"[DEBUG] Error detecting champion from folder: {e}")
+			import traceback
+			traceback.print_exc()
 			return ""
 	
 	def _safe_cleanup_work_folder(self, work_root: Path, cleanup_repathed: bool = False):
@@ -3254,6 +3594,18 @@ class WizardApp:
 			mod_folder_path = self.mod_folder_path.get().strip()
 			work_root = self._work_root()
 			
+			# Comprehensive logging
+			print(f"\n{'#'*80}")
+			print(f"### QUICK EXTRACT FOR BIN SELECTION - START")
+			print(f"{'#'*80}")
+			print(f"[INFO] Champions Directory: {champs_dir}")
+			print(f"[INFO] Champions Dir Exists: {champs_dir.exists()}")
+			print(f"[INFO] Fantome Path: {fantome_path if fantome_path else '(empty)'}")
+			print(f"[INFO] Mod Folder Path: {mod_folder_path if mod_folder_path else '(empty)'}")
+			print(f"[INFO] Work Root: {work_root}")
+			print(f"[INFO] Using: {'MOD FOLDER' if mod_folder_path else 'FANTOME'}")
+			print(f"{'#'*80}\n")
+			
 			# Safe cleanup
 			self._set_status("Cleaning up previous run files...")
 			self._safe_cleanup_work_folder(work_root, cleanup_repathed=True)
@@ -3269,6 +3621,21 @@ class WizardApp:
 				self._set_status("Using pre-extracted mod folder...")
 				mod_folder = Path(mod_folder_path)
 				
+				print(f"\n[MOD FOLDER MODE]")
+				print(f"[INFO] Mod Folder: {mod_folder}")
+				print(f"[INFO] Mod Folder Exists: {mod_folder.exists()}")
+				print(f"[INFO] Mod Folder Is Dir: {mod_folder.is_dir()}")
+				
+				if not mod_folder.exists():
+					self._set_status("ERROR: Mod folder does not exist!")
+					messagebox.showerror(APP_TITLE, f"Mod folder does not exist:\n{mod_folder}")
+					return
+				
+				if not mod_folder.is_dir():
+					self._set_status("ERROR: Mod folder path is not a directory!")
+					messagebox.showerror(APP_TITLE, f"Path is not a directory:\n{mod_folder}")
+					return
+				
 				# Auto-detect champion name
 				champ_name = self._detect_champion_from_folder(mod_folder, champs_dir)
 				if not champ_name:
@@ -3282,6 +3649,13 @@ class WizardApp:
 				# Copy mod folder to mod_extract/unpacked
 				mod_unpack = mod_dir / 'unpacked'
 				shutil.copytree(mod_folder, mod_unpack, dirs_exist_ok=True)
+				
+				# Extract hashes from mod folder
+				try:
+					self._set_status("Extracting hashes from mod files...")
+					self._extract_hashes_from_folder(mod_unpack, hashes_dir)
+				except Exception as e:
+					self._set_status(f"Hash extraction skipped: {e}")
 			else:
 				# FANTOME MODE: Extract mod WAD
 				fantome = Path(fantome_path)
@@ -3319,6 +3693,33 @@ class WizardApp:
 				mod_unpack = mod_dir / 'unpacked'
 				self._try_extract_wad(mod_wad_path, mod_unpack, hashes_dir)
 			
+			# Check if data/characters/{champion}/skins folder exists
+			# If it doesn't exist, convert all DDS to TEX
+			# Do this AFTER hash extraction, but BEFORE populating BIN dropdown
+			champ_skins_folder_data = mod_unpack / 'data' / 'characters' / self._champion / 'skins'
+			
+			print(f"[DEBUG] Checking for skins folder (after hash extraction):")
+			print(f"[DEBUG]   data: {champ_skins_folder_data} (exists: {champ_skins_folder_data.exists()})")
+			print(f"[DEBUG] Champion: {self._champion}")
+			
+			if not champ_skins_folder_data.exists():
+				print(f"[DEBUG] data/characters/{self._champion}/skins folder not found - converting all DDS files to TEX...")
+				self._set_status(f"No data/characters/{self._champion}/skins folder found - converting all DDS files to TEX...")
+				try:
+					converted_count = self._convert_all_dds_to_tex(mod_unpack)
+					if converted_count > 0:
+						self._set_status(f"Converted {converted_count} DDS file(s) to TEX")
+						print(f"[DEBUG] Successfully converted {converted_count} DDS files to TEX")
+					else:
+						print(f"[DEBUG] No DDS files found to convert")
+				except Exception as e:
+					self._set_status(f"Warning: DDS→TEX conversion failed: {e}")
+					print(f"[DEBUG] DDS→TEX conversion error: {e}")
+					import traceback
+					traceback.print_exc()
+			else:
+				print(f"[DEBUG] Skins folder exists, skipping DDS→TEX conversion")
+			
 			# Populate BIN dropdown
 			self._set_status("Populating BIN dropdown...")
 			self._populate_bin_dropdown(mod_unpack)
@@ -3347,6 +3748,18 @@ class WizardApp:
 			mod_folder_path = self.mod_folder_path.get().strip()
 			work_root = self._work_root()
 			
+			# Comprehensive logging
+			print(f"\n{'#'*80}")
+			print(f"### DETECT AND EXTRACT - START")
+			print(f"{'#'*80}")
+			print(f"[INFO] Champions Directory: {champs_dir}")
+			print(f"[INFO] Champions Dir Exists: {champs_dir.exists()}")
+			print(f"[INFO] Fantome Path: {fantome_path if fantome_path else '(empty)'}")
+			print(f"[INFO] Mod Folder Path: {mod_folder_path if mod_folder_path else '(empty)'}")
+			print(f"[INFO] Work Root: {work_root}")
+			print(f"[INFO] Using: {'MOD FOLDER' if mod_folder_path else 'FANTOME'}")
+			print(f"{'#'*80}\n")
+			
 			# Safe cleanup of previous run leftovers (including repathed folders at start of new operation)
 			self._set_status("Cleaning up previous run files...")
 			self._safe_cleanup_work_folder(work_root, cleanup_repathed=True)
@@ -3365,6 +3778,21 @@ class WizardApp:
 				self._set_status("Using pre-extracted mod folder...")
 				mod_folder = Path(mod_folder_path)
 				
+				print(f"\n[MOD FOLDER MODE]")
+				print(f"[INFO] Mod Folder: {mod_folder}")
+				print(f"[INFO] Mod Folder Exists: {mod_folder.exists()}")
+				print(f"[INFO] Mod Folder Is Dir: {mod_folder.is_dir()}")
+				
+				if not mod_folder.exists():
+					self._set_status("ERROR: Mod folder does not exist!")
+					messagebox.showerror(APP_TITLE, f"Mod folder does not exist:\n{mod_folder}")
+					return
+				
+				if not mod_folder.is_dir():
+					self._set_status("ERROR: Mod folder path is not a directory!")
+					messagebox.showerror(APP_TITLE, f"Path is not a directory:\n{mod_folder}")
+					return
+				
 				# Auto-detect champion name from folder structure
 				self._set_status("Auto-detecting champion from folder structure...")
 				champ_name = self._detect_champion_from_folder(mod_folder, champs_dir)
@@ -3382,6 +3810,18 @@ class WizardApp:
 				mod_unpack = mod_dir / 'unpacked'
 				shutil.copytree(mod_folder, mod_unpack, dirs_exist_ok=True)
 				ok_mod = True  # Mod folder copy succeeded
+				
+				# Check if data/characters/{champion}/skins folder exists - if not, convert all DDS to TEX
+				champ_skins_folder = mod_unpack / 'data' / 'characters' / champ_name / 'skins'
+				if not champ_skins_folder.exists():
+					self._set_status(f"No data/characters/{champ_name}/skins folder found - converting all DDS files to TEX...")
+					try:
+						converted_count = self._convert_all_dds_to_tex(mod_unpack)
+						if converted_count > 0:
+							self._set_status(f"Converted {converted_count} DDS file(s) to TEX")
+					except Exception as e:
+						self._set_status(f"Warning: DDS→TEX conversion failed: {e}")
+						print(f"[DEBUG] DDS→TEX conversion error: {e}")
 				
 				# Find fresh wad in champions folder
 				self._set_status("Locating fresh .wad.client in Champions folder...")
@@ -3535,6 +3975,31 @@ class WizardApp:
 					self._extract_hashes_from_folder(mod_unpack, hashes_dir)
 				except Exception as e:
 					self._set_status(f"Hash extraction skipped: {e}")
+			
+			# Check if data/characters/{champion}/skins folder exists
+			# If it doesn't exist, convert all DDS to TEX
+			# Do this AFTER hash extraction, but BEFORE populating BIN dropdown
+			champ_skins_folder_data = mod_unpack / 'data' / 'characters' / self._champion / 'skins'
+			
+			print(f"[DEBUG] Checking for skins folder (after hash extraction):")
+			print(f"[DEBUG]   data: {champ_skins_folder_data} (exists: {champ_skins_folder_data.exists()})")
+			print(f"[DEBUG] Champion: {self._champion}")
+			
+			if not champ_skins_folder_data.exists():
+				print(f"[DEBUG] data/characters/{self._champion}/skins folder not found - converting all DDS files to TEX...")
+				self._set_status(f"No data/characters/{self._champion}/skins folder found - converting all DDS files to TEX...")
+				try:
+					converted_count = self._convert_all_dds_to_tex(mod_unpack)
+					if converted_count > 0:
+						self._set_status(f"Converted {converted_count} DDS file(s) to TEX")
+						print(f"[DEBUG] Successfully converted {converted_count} DDS files to TEX")
+					else:
+						print(f"[DEBUG] No DDS files found to convert")
+				except Exception as e:
+					self._set_status(f"Warning: DDS→TEX conversion failed: {e}")
+					print(f"[DEBUG] DDS→TEX conversion error: {e}")
+					import traceback
+					traceback.print_exc()
 
 			# Convert DDS↔TEX in mod subfolders BEFORE overlay
 			# This ensures mod's edited textures match what BINs reference
@@ -3553,6 +4018,21 @@ class WizardApp:
 			except Exception as e:
 				self._set_status(f"HUD folder storage skipped: {e}")
 				print(f"[DEBUG] HUD folder storage error: {e}")
+			
+			# Fix TEX dimensions BEFORE copying to fresh folder (prevents crashes from invalid dimensions)
+			if self.fix_tex_dimensions_enabled.get():
+				self._set_status("Checking and fixing .tex dimensions in mod folder...")
+				try:
+					stats = self._fix_tex_dimensions(mod_unpack)
+					if stats['fixed'] > 0:
+						self._set_status(f"✓ Fixed {stats['fixed']} .tex file(s) with invalid dimensions")
+					elif stats['total_tex'] > 0:
+						self._set_status(f"✓ All {stats['total_tex']} .tex files have valid dimensions")
+				except Exception as e:
+					self._set_status(f"⚠ Warning: TEX dimension fix failed: {e}")
+					print(f"[ERROR] TEX dimension fix failed: {e}")
+					import traceback
+					traceback.print_exc()
 			
 			# Overlay: copy mod extracted content over fresh extracted content (overwrite)
 			self._set_status("Overlaying mod over fresh (overwrite)...")
@@ -3700,6 +4180,17 @@ class WizardApp:
 						self._store_mod_hud_folder(mod_unpack, champ)
 					except Exception:
 						pass
+					
+					# Fix TEX dimensions BEFORE copying to fresh folder (prevents crashes from invalid dimensions)
+					if self.fix_tex_dimensions_enabled.get():
+						self._set_status(f"[{idx}/{total_files}] Checking and fixing .tex dimensions in mod folder...")
+						try:
+							stats = self._fix_tex_dimensions(mod_unpack)
+							if stats['fixed'] > 0:
+								self._set_status(f"[{idx}/{total_files}] ✓ Fixed {stats['fixed']} .tex file(s)")
+						except Exception as e:
+							self._set_status(f"[{idx}/{total_files}] ⚠ TEX fix warning: {e}")
+							print(f"[ERROR] TEX dimension fix failed: {e}")
 					
 					# Overlay
 					self._set_status(f"[{idx}/{total_files}] Overlaying mod over fresh...")
@@ -4134,12 +4625,11 @@ class WizardApp:
 		else:
 			raise ValueError(f"Unsupported DDS format: {dds_pixel_format['dwFourCC']}")
 		
-		# Handle mipmaps
+		# Handle mipmaps - if mipmaps exist, we'll use only the largest (level 0)
+		# Don't validate mipmap count strictly - just use what's there
 		if dds_header['dwMipMapCount'] > 1:
-			expected_mipmap_count = math.floor(math.log2(max(dds_header['dwWidth'], dds_header['dwHeight']))) + 1
-			if dds_header['dwMipMapCount'] != expected_mipmap_count:
-				raise ValueError(f"Wrong DDS mipmap count: {dds_header['dwMipMapCount']}, expected: {expected_mipmap_count}")
 			tex.mipmaps = True
+			# We'll extract all mipmaps but only use the largest one
 		
 		# RGBA conversion if needed
 		if custom_rgba_format:
@@ -4154,7 +4644,7 @@ class WizardApp:
 				new_data += struct.pack('I', current_pixel_data)
 			dds_data = new_data
 		
-		# Prepare TEX data (matching LtMAO's mipmap extraction)
+		# Prepare TEX data - use only the largest mipmap (highest resolution)
 		if tex.mipmaps:
 			if tex.format == pyRitoFile.tex.TEXFormat.DXT1:
 				block_size = 4
@@ -4166,25 +4656,51 @@ class WizardApp:
 				block_size = 1
 				bytes_per_block = 4
 			
-			mipmap_count = dds_header['dwMipMapCount']
-			current_offset = 0
-			tex.data = []
-			for i in range(mipmap_count):
-				current_width = max(tex.width >> i, 1)
-				current_height = max(tex.height >> i, 1)
-				block_width = (current_width + block_size - 1) // block_size
-				block_height = (current_height + block_size - 1) // block_size
-				current_size = bytes_per_block * block_width * block_height
-				data = dds_data[current_offset:current_offset+current_size]
-				tex.data.append(data)
-				current_offset += current_size
-			# Mipmap in DDS file is reversed to TEX file
-			tex.data.reverse()
+			# Calculate size of largest mipmap (level 0)
+			block_width = (tex.width + block_size - 1) // block_size
+			block_height = (tex.height + block_size - 1) // block_size
+			largest_mipmap_size = bytes_per_block * block_width * block_height
+			
+			# Extract only the largest mipmap (first in DDS file, which is level 0)
+			largest_mipmap = dds_data[:largest_mipmap_size]
+			
+			# Use only the largest mipmap, disable mipmaps in output
+			tex.data = [largest_mipmap]
+			tex.mipmaps = False
 		else:
 			tex.data = [dds_data]
 		
 		# Write TEX file
 		tex.write(str(tex_path))
+	
+	def _convert_all_dds_to_tex(self, directory: Path) -> int:
+		"""
+		Recursively convert all DDS files to TEX in the given directory.
+		Only converts if .tex file doesn't already exist.
+		Returns count of converted files.
+		"""
+		converted_count = 0
+		directory = Path(directory)
+		
+		if not directory.exists():
+			return 0
+		
+		# Find all DDS files recursively
+		for dds_file in directory.rglob('*.dds'):
+			# Skip if already has a TEX version
+			tex_file = dds_file.with_suffix('.tex')
+			if tex_file.exists():
+				continue
+			
+			try:
+				self._dds2tex(dds_file, tex_file)
+				converted_count += 1
+				print(f"[DEBUG] Converted DDS→TEX: {dds_file} -> {tex_file}")
+			except Exception as e:
+				print(f"[DEBUG] Failed to convert DDS→TEX {dds_file}: {e}")
+				continue
+		
+		return converted_count
 	
 	def _convert_dds_tex_in_subfolders(self, fresh_unpack: Path, mod_unpack: Path, main_champion: str) -> None:
 		"""
@@ -4313,13 +4829,32 @@ class WizardApp:
 				print("[DEBUG populate_bin_dropdown] No champion found, returning")
 				return
 			
-			# Look for BIN files in the mod's skins folder
+			# Look for BIN files in the mod's skins folder (only check data folder)
 			skins_dir = mod_unpack / 'data' / 'characters' / champ / 'skins'
-			print(f"[DEBUG populate_bin_dropdown] Skins dir: {skins_dir}")
-			print(f"[DEBUG populate_bin_dropdown] Skins dir exists: {skins_dir.exists()}")
+			
+			print(f"[DEBUG populate_bin_dropdown] Skins dir (data): {skins_dir} (exists: {skins_dir.exists()})")
+			
 			if not skins_dir.exists():
-				print("[DEBUG populate_bin_dropdown] Skins dir doesn't exist, returning")
-				return
+				print("[DEBUG populate_bin_dropdown] data/characters/{champ}/skins folder doesn't exist - converting all DDS files to TEX...")
+				# Convert all DDS to TEX if data skins folder doesn't exist
+				try:
+					converted_count = self._convert_all_dds_to_tex(mod_unpack)
+					if converted_count > 0:
+						print(f"[DEBUG populate_bin_dropdown] Converted {converted_count} DDS file(s) to TEX")
+						# Check again after conversion
+						if skins_dir.exists():
+							print("[DEBUG populate_bin_dropdown] Skins dir now exists after conversion, continuing...")
+						else:
+							print("[DEBUG populate_bin_dropdown] Skins dir still doesn't exist after conversion, returning")
+							return
+					else:
+						print("[DEBUG populate_bin_dropdown] No DDS files found to convert, returning")
+						return
+				except Exception as e:
+					print(f"[DEBUG populate_bin_dropdown] DDS→TEX conversion failed: {e}")
+					import traceback
+					traceback.print_exc()
+					return
 			
 			# Find all skin folders that contain BIN files (anywhere in their tree)
 			available_bins = set()
@@ -4351,6 +4886,32 @@ class WizardApp:
 			
 			print(f"[DEBUG populate_bin_dropdown] Total BINs found: {bin_count}")
 			print(f"[DEBUG populate_bin_dropdown] Available bins: {available_bins}")
+			
+			# If no BINs found, try converting DDS to TEX and check again
+			if not available_bins and bin_count == 0:
+				print("[DEBUG populate_bin_dropdown] No BINs found - converting all DDS files to TEX...")
+				try:
+					converted_count = self._convert_all_dds_to_tex(mod_unpack)
+					if converted_count > 0:
+						print(f"[DEBUG populate_bin_dropdown] Converted {converted_count} DDS file(s) to TEX, searching for BINs again...")
+						# Search again for BINs after conversion
+						for root, _dirs, files in os.walk(skins_dir):
+							for f in files:
+								if f.lower().endswith('.bin'):
+									bin_count += 1
+									rel_path = Path(root).relative_to(skins_dir)
+									if rel_path.parts:
+										skin_folder = rel_path.parts[0]
+										skin_name = skin_folder.capitalize()
+										available_bins.add(skin_name)
+									else:
+										skin_name = f.lower().replace('.bin', '').capitalize()
+										available_bins.add(skin_name)
+						print(f"[DEBUG populate_bin_dropdown] After conversion - Total BINs found: {bin_count}, Available bins: {available_bins}")
+				except Exception as e:
+					print(f"[DEBUG populate_bin_dropdown] DDS→TEX conversion failed: {e}")
+					import traceback
+					traceback.print_exc()
 			
 			# Sort and update dropdown
 			if available_bins:
@@ -5307,6 +5868,184 @@ class WizardApp:
 		self._show_step(0)
 		self._update_nav()
 	
+	def _nuke_materials(self, repathed_dir: Path):
+		"""Remove StaticMaterialDef entries and replace material links with texture paths"""
+		try:
+			from pyRitoFile.bin import BIN, BINType
+			
+			print(f"[DEBUG] Material Nuker: Processing {repathed_dir}")
+			
+			# Load hash tables
+			hashes_dir = self._hash_dir()
+			WizardApp._HashStorage.read_all_hashes(hashes_dir)
+			hashtables = WizardApp._HashStorage.hashtables
+			
+			# Create reverse lookup: raw_name -> hex_hash
+			H = {}
+			for fname in ['hashes.binentries.txt', 'hashes.binfields.txt', 'hashes.bintypes.txt']:
+				if fname in hashtables:
+					for hex_hash, raw_name in hashtables[fname].items():
+						H[raw_name] = hex_hash
+			
+			# Find all BIN files in repathed directory
+			bin_files = list(repathed_dir.rglob('*.bin'))
+			total_materials_removed = 0
+			total_replacements = 0
+			
+			for bin_file in bin_files:
+				try:
+					# Read BIN file
+					bin_obj = BIN().read(str(bin_file))
+					bin_obj.un_hash(hashtables)
+					
+					# Step 1: Build map of material paths to diffuse textures
+					material_to_diffuse = {}
+					static_material_hashes = []
+					
+					for entry in bin_obj.entries:
+						# Check if StaticMaterialDef (case-insensitive)
+						entry_type_lower = entry.type.lower() if isinstance(entry.type, str) else ''
+						is_static_material = entry_type_lower == 'staticmaterialdef'
+						
+						if is_static_material:
+							# Find diffuse texture
+							diffuse_texture = self._find_diffuse_texture_in_material(entry, H, hashtables)
+							if diffuse_texture:
+								material_to_diffuse[entry.hash] = diffuse_texture
+								static_material_hashes.append(entry.hash)
+					
+					if not material_to_diffuse:
+						continue  # No materials in this BIN
+					
+					# Step 2: Replace material links in SkinMeshDataProperties/SkinCharacterDataProperties
+					replacements_made = 0
+					texture_field_hash = H.get('texture') or H.get('mTexture')
+					
+					for entry in bin_obj.entries:
+						entry_type_lower = entry.type.lower() if isinstance(entry.type, str) else ''
+						is_skin_entry = entry_type_lower in ['skinmeshdataproperties', 'skincharacterdataproperties']
+						
+						if is_skin_entry:
+							# Look for skinMeshProperties embedded field
+							for field in entry.data:
+								field_name_lower = field.hash.lower() if isinstance(field.hash, str) else ''
+								if 'hashes.binfields.txt' in hashtables:
+									field_name_unhashed = hashtables['hashes.binfields.txt'].get(field.hash, field.hash)
+									field_name_lower = field_name_unhashed.lower() if isinstance(field_name_unhashed, str) else field_name_lower
+								
+								if field_name_lower == 'skinmeshproperties':
+									if hasattr(field, 'data') and isinstance(field.data, list):
+										fields_to_remove = []
+										
+										for field_idx, skin_mesh_field in enumerate(field.data):
+											skin_mesh_field_name_lower = skin_mesh_field.hash.lower() if isinstance(skin_mesh_field.hash, str) else ''
+											if 'hashes.binfields.txt' in hashtables:
+												skin_mesh_field_unhashed = hashtables['hashes.binfields.txt'].get(skin_mesh_field.hash, skin_mesh_field.hash)
+												skin_mesh_field_name_lower = skin_mesh_field_unhashed.lower() if isinstance(skin_mesh_field_unhashed, str) else skin_mesh_field_name_lower
+											
+											# Delete main Material field
+											if skin_mesh_field_name_lower == 'material':
+												if hasattr(skin_mesh_field, 'type') and skin_mesh_field.type == BINType.LINK:
+													if hasattr(skin_mesh_field, 'data') and isinstance(skin_mesh_field.data, str):
+														if skin_mesh_field.data in material_to_diffuse:
+															fields_to_remove.append(field_idx)
+															replacements_made += 1
+											
+											# Replace material links in materialOverride
+											elif skin_mesh_field_name_lower == 'materialoverride':
+												if hasattr(skin_mesh_field, 'data') and isinstance(skin_mesh_field.data, list):
+													for override_entry in skin_mesh_field.data:
+														if hasattr(override_entry, 'data') and isinstance(override_entry.data, list):
+															for override_field in override_entry.data:
+																override_field_name_lower = override_field.hash.lower() if isinstance(override_field.hash, str) else ''
+																if 'hashes.binfields.txt' in hashtables:
+																	override_field_unhashed = hashtables['hashes.binfields.txt'].get(override_field.hash, override_field.hash)
+																	override_field_name_lower = override_field_unhashed.lower() if isinstance(override_field_unhashed, str) else override_field_name_lower
+																
+																if override_field_name_lower == 'material':
+																	if hasattr(override_field, 'type') and override_field.type == BINType.LINK:
+																		if hasattr(override_field, 'data') and isinstance(override_field.data, str):
+																			material_link = override_field.data
+																			if material_link in material_to_diffuse:
+																				override_field.hash = texture_field_hash
+																				override_field.type = BINType.STRING
+																				override_field.data = material_to_diffuse[material_link]
+																				replacements_made += 1
+										
+										# Remove marked Material fields
+										for field_idx in reversed(fields_to_remove):
+											del field.data[field_idx]
+					
+					# Step 3: Remove all StaticMaterialDef entries
+					original_count = len(bin_obj.entries)
+					bin_obj.entries = [entry for entry in bin_obj.entries if entry.hash not in static_material_hashes]
+					removed_count = original_count - len(bin_obj.entries)
+					
+					if removed_count > 0 or replacements_made > 0:
+						# Write modified BIN
+						bin_obj.write(str(bin_file))
+						total_materials_removed += removed_count
+						total_replacements += replacements_made
+						print(f"[DEBUG] {bin_file.name}: Removed {removed_count} materials, made {replacements_made} replacements")
+				
+				except Exception as e:
+					print(f"[DEBUG] Error processing {bin_file.name}: {e}")
+					continue
+			
+			WizardApp._HashStorage.free_all_hashes()
+			
+			if total_materials_removed > 0 or total_replacements > 0:
+				self._set_status(f"Material Nuker: Removed {total_materials_removed} materials, made {total_replacements} replacements")
+				print(f"[DEBUG] Material Nuker complete: {total_materials_removed} materials removed, {total_replacements} replacements")
+			else:
+				print("[DEBUG] Material Nuker: No materials found to remove")
+		
+		except Exception as e:
+			print(f"[DEBUG] Material Nuker error: {e}")
+			import traceback
+			traceback.print_exc()
+	
+	def _find_diffuse_texture_in_material(self, material_entry, H, hashtables):
+		"""Find the diffuse texture path in a StaticMaterialDef entry"""
+		sampler_values_hash = H.get('samplerValues')
+		if not sampler_values_hash:
+			return None
+		
+		for field in material_entry.data:
+			field_name_lower = field.hash.lower() if isinstance(field.hash, str) else ''
+			if 'hashes.binfields.txt' in hashtables:
+				field_name_unhashed = hashtables['hashes.binfields.txt'].get(field.hash, field.hash)
+				field_name_lower = field_name_unhashed.lower() if isinstance(field_name_unhashed, str) else field_name_lower
+			
+			if field_name_lower == 'samplervalues' or field.hash == sampler_values_hash:
+				if isinstance(field.data, list):
+					for sampler_def in field.data:
+						if hasattr(sampler_def, 'data') and isinstance(sampler_def.data, list):
+							sampler_name = None
+							texture_path = None
+							
+							for sampler_field in sampler_def.data:
+								sampler_field_name = sampler_field.hash
+								if 'hashes.binfields.txt' in hashtables:
+									sampler_field_name = hashtables['hashes.binfields.txt'].get(sampler_field.hash, sampler_field_name)
+								
+								sampler_field_name_lower = sampler_field_name.lower() if isinstance(sampler_field_name, str) else ''
+								
+								if sampler_field_name_lower in ['texturename', 'samplername'] and hasattr(sampler_field, 'data') and isinstance(sampler_field.data, str):
+									if '/' in sampler_field.data or '\\' in sampler_field.data or sampler_field.data.lower().endswith(('.dds', '.tex')):
+										texture_path = sampler_field.data
+									else:
+										sampler_name = sampler_field.data
+								elif sampler_field_name_lower == 'texturepath' and hasattr(sampler_field, 'data') and isinstance(sampler_field.data, str):
+									texture_path = sampler_field.data
+							
+							if sampler_name and 'diffuse' in sampler_name.lower() and texture_path:
+								return texture_path
+							elif texture_path and not sampler_name:
+								return texture_path
+		
+		return None
+
 	def _auto_check_and_fix_missing(self):
 		"""Automatically check for missing files, create placeholders, and package final fantome"""
 		try:
@@ -5315,6 +6054,17 @@ class WizardApp:
 			if not repathed_dir or not repathed_dir.exists():
 				self._set_status("Error: repathed folder not found")
 				return
+			
+			# Apply Material Nuker if enabled (BEFORE checking for missing files)
+			if self.nuke_materials_enabled.get():
+				self._set_status("Nuking materials...")
+				try:
+					self._nuke_materials(repathed_dir)
+				except Exception as e:
+					self._set_status(f"Material Nuker failed: {e}")
+					print(f"[DEBUG] Material Nuker error: {e}")
+					import traceback
+					traceback.print_exc()
 			
 			self._set_status("Checking for missing texture files...")
 			
@@ -5426,8 +6176,14 @@ class WizardApp:
 		for missing_file in missing_files:
 			# Missing files are paths as they appear in the BINs (already repathed if applicable)
 			# Use them as-is - they're in the exact format the game expects
-			target_path = missing_file.lower()
+			# Normalize path separators to forward slashes
+			target_path = missing_file.replace('\\', '/').lower()
 			target_file = repathed_dir / target_path
+			
+			# Debug: Print the file being processed
+			print(f"[DEBUG] Processing missing file: {missing_file}")
+			print(f"[DEBUG] Target path: {target_path}")
+			print(f"[DEBUG] Target file: {target_file}")
 			
 			# Skip if file already exists
 			if target_file.exists():
@@ -5443,14 +6199,22 @@ class WizardApp:
 				error_count += 1
 				continue
 			
-			# Determine which placeholder to use
+			# Determine which placeholder to use based on file extension
+			# Use Path.suffix to properly extract extension even with multiple dots in filename
+			# e.g., "3026_items_noise_02.briar.dds" -> suffix is ".dds"
 			source_placeholder = None
-			if missing_file.lower().endswith('.dds'):
+			file_suffix = Path(missing_file).suffix.lower()
+			print(f"[DEBUG] File suffix detected: {file_suffix}")
+			
+			if file_suffix == '.dds':
 				source_placeholder = invis_dds
-			elif missing_file.lower().endswith('.tex'):
+				print(f"[DEBUG] Using DDS placeholder")
+			elif file_suffix == '.tex':
 				source_placeholder = invis_tex
+				print(f"[DEBUG] Using TEX placeholder")
 			else:
 				# Skip non-texture files
+				print(f"[DEBUG] Skipping non-texture file (suffix: {file_suffix})")
 				continue
 			
 			# Copy the placeholder file
