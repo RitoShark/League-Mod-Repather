@@ -6161,17 +6161,27 @@ class WizardApp:
 		print(f"[DEBUG] placeholder_dir: {placeholder_dir}")
 		invis_dds = placeholder_dir / 'invis.dds'
 		invis_tex = placeholder_dir / 'invis.tex'
+		white_dds = placeholder_dir / 'white.dds'
+		white_tex = placeholder_dir / 'white.tex'
+		
 		print(f"[DEBUG] invis_dds exists: {invis_dds.exists()}, path: {invis_dds}")
 		print(f"[DEBUG] invis_tex exists: {invis_tex.exists()}, path: {invis_tex}")
+		print(f"[DEBUG] white_dds exists: {white_dds.exists()}, path: {white_dds}")
+		print(f"[DEBUG] white_tex exists: {white_tex.exists()}, path: {white_tex}")
 		
 		if not invis_dds.exists() or not invis_tex.exists():
 			self._set_status("Warning: Placeholder files not found. Skipping placeholder creation.")
 			print(f"[ERROR] Placeholder files not found! invis_dds: {invis_dds.exists()}, invis_tex: {invis_tex.exists()}")
 			return
 		
+		if not white_dds.exists() or not white_tex.exists():
+			print(f"[WARNING] White placeholder files not found! white_dds: {white_dds.exists()}, white_tex: {white_tex.exists()}")
+			print("[WARNING] Will use invis placeholders for particle files")
+		
 		created_count = 0
 		skipped_count = 0
 		error_count = 0
+		white_count = 0
 		
 		for missing_file in missing_files:
 			# Missing files are paths as they appear in the BINs (already repathed if applicable)
@@ -6199,23 +6209,48 @@ class WizardApp:
 				error_count += 1
 				continue
 			
-			# Determine which placeholder to use based on file extension
+			# Determine which placeholder to use based on file extension and name
 			# Use Path.suffix to properly extract extension even with multiple dots in filename
 			# e.g., "3026_items_noise_02.briar.dds" -> suffix is ".dds"
 			source_placeholder = None
 			file_suffix = Path(missing_file).suffix.lower()
+			file_name_lower = missing_file.lower()
+			
 			print(f"[DEBUG] File suffix detected: {file_suffix}")
 			
-			if file_suffix == '.dds':
-				source_placeholder = invis_dds
-				print(f"[DEBUG] Using DDS placeholder")
-			elif file_suffix == '.tex':
-				source_placeholder = invis_tex
-				print(f"[DEBUG] Using TEX placeholder")
+			# Check if this is a particle file that needs white placeholder
+			is_particle_file = ('coloroverlifetime' in file_name_lower or 
+			                   'color-hold' in file_name_lower or
+			                   'colorhold' in file_name_lower)
+			
+			if is_particle_file:
+				print(f"[DEBUG] Detected particle file (coloroverlifetime/color-hold)")
+				if file_suffix == '.dds' and white_dds.exists():
+					source_placeholder = white_dds
+					white_count += 1
+					print(f"[DEBUG] Using WHITE DDS placeholder for particle")
+				elif file_suffix == '.tex' and white_tex.exists():
+					source_placeholder = white_tex
+					white_count += 1
+					print(f"[DEBUG] Using WHITE TEX placeholder for particle")
+				elif file_suffix == '.dds':
+					source_placeholder = invis_dds
+					print(f"[DEBUG] White DDS not found, falling back to invis DDS")
+				elif file_suffix == '.tex':
+					source_placeholder = invis_tex
+					print(f"[DEBUG] White TEX not found, falling back to invis TEX")
 			else:
-				# Skip non-texture files
-				print(f"[DEBUG] Skipping non-texture file (suffix: {file_suffix})")
-				continue
+				# Regular texture - use invis placeholder
+				if file_suffix == '.dds':
+					source_placeholder = invis_dds
+					print(f"[DEBUG] Using DDS placeholder")
+				elif file_suffix == '.tex':
+					source_placeholder = invis_tex
+					print(f"[DEBUG] Using TEX placeholder")
+				else:
+					# Skip non-texture files
+					print(f"[DEBUG] Skipping non-texture file (suffix: {file_suffix})")
+					continue
 			
 			# Copy the placeholder file
 			try:
@@ -6228,11 +6263,17 @@ class WizardApp:
 				import traceback
 				traceback.print_exc()
 		
+		
 		status_msg = f"Created {created_count} placeholder texture files"
+		if white_count > 0:
+			status_msg += f" ({white_count} white for particles)"
 		if skipped_count > 0:
 			status_msg += f", skipped {skipped_count} (already exist)"
 		if error_count > 0:
 			status_msg += f", {error_count} errors"
+		
+		print(f"[DEBUG] Placeholder creation complete: {status_msg}")
+		print(f"[DEBUG] Total created: {created_count}, White: {white_count}, Skipped: {skipped_count}, Errors: {error_count}")
 		self._set_status(status_msg)
 	
 	def _create_info_json(self, champ: str, is_new: bool) -> str:
