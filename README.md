@@ -68,6 +68,8 @@ When done, you'll see: `✓ DONE! Created {name}_repathed.fantome`
 
 Your new mod is in: `C:\Users\<YourName>\Documents\FantomeRepathTool\`
 
+and the fantome will be in the same location as the fantome u originally chose.
+
 Look for: `{original_name}_repathed.fantome`
 
 ### **Install & Use**
