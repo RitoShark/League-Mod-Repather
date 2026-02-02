@@ -2217,7 +2217,7 @@ class WizardApp:
 	# Hash storage (minimal version of LtMAO hash_helper.Storage)
 	class _HashStorage:
 		hashtables = {}
-		
+
 		@staticmethod
 		def read_all_hashes(hashes_dir: Path):
 			"""Read all hashes from hashes/ directory."""
@@ -2225,11 +2225,14 @@ class WizardApp:
 			_HashStorage.hashtables = {}
 			bin_files = ['hashes.binentries.txt', 'hashes.binhashes.txt', 'hashes.bintypes.txt', 'hashes.binfields.txt']
 			wad_files = ['hashes.game.txt', 'hashes.lcu.txt']
+			print(f"[DEBUG] read_all_hashes called with: {hashes_dir}")
 			for fname in bin_files + wad_files:
 				_HashStorage.hashtables[fname] = {}
 				fpath = hashes_dir / fname
 				if not fpath.is_file():
+					print(f"[DEBUG] Hash file NOT FOUND: {fpath}")
 					continue
+				print(f"[DEBUG] Loading hash file: {fpath}")
 				sep = 16 if fname in wad_files else 8
 				with open(fpath, 'r', encoding='utf-8') as f:
 					for line in f:
@@ -2238,6 +2241,7 @@ class WizardApp:
 						key = line[:sep]
 						val = line[sep+1:-1]
 						_HashStorage.hashtables[fname][key] = val
+				print(f"[DEBUG] Loaded {len(_HashStorage.hashtables[fname])} entries from {fname}")
 		
 		@staticmethod
 		def free_all_hashes():
@@ -3048,7 +3052,16 @@ class WizardApp:
 		# Load hashes before starting (from AppData, not bundled)
 		hashes_dir = self._hash_dir()
 		self._set_status("Loading hash tables...")
+		print(f"[DEBUG] Loading hashtables from: {hashes_dir}")
+		print(f"[DEBUG] hashes_dir exists: {hashes_dir.exists()}")
 		WizardApp._HashStorage.read_all_hashes(hashes_dir)
+		# Debug: verify hashtables loaded
+		print(f"[DEBUG] After read_all_hashes: {len(WizardApp._HashStorage.hashtables)} keys")
+		for fname, entries in WizardApp._HashStorage.hashtables.items():
+			print(f"[DEBUG]   {fname}: {len(entries)} entries")
+		if 'hashes.bintypes.txt' in WizardApp._HashStorage.hashtables:
+			types_count = len(WizardApp._HashStorage.hashtables['hashes.bintypes.txt'])
+			print(f"[DEBUG] bintypes loaded with {types_count} entries")
 		
 		# Get custom prefix or generate random one
 		prefix = self.custom_prefix.get().strip()
@@ -3240,7 +3253,21 @@ class WizardApp:
 		self._set_status("Repathing (ignore missing, combine linked)...")
 		try:
 			bum.bum(str(output_dir), ignore_missing=True, combine_linked=True)
-			
+
+			# Debug: verify hashtables still exist after bum.bum()
+			print(f"[DEBUG] After bum.bum(): hashtables has {len(WizardApp._HashStorage.hashtables)} keys")
+			if 'hashes.bintypes.txt' in WizardApp._HashStorage.hashtables:
+				print(f"[DEBUG] bintypes still has {len(WizardApp._HashStorage.hashtables['hashes.bintypes.txt'])} entries")
+			else:
+				print("[DEBUG] WARNING: bintypes MISSING after bum.bum()!")
+
+			# Separate VFX entries into a separate BIN file in the data folder
+			self._set_status("Separating VFX entries into separate BIN...")
+			vfx_count = self._separate_vfx_entries(output_dir, champ)
+			if vfx_count > 0:
+				self._set_status(f"Separated {vfx_count} VFX entries into data folder")
+				print(f"[DEBUG] Separated {vfx_count} VFX entries into data folder")
+
 			# Fix HUD paths in repathed BIN files (change .dds to .tex)
 			self._set_status("Fixing HUD paths in repathed BIN files...")
 			bin_fixed_count = 0
@@ -3317,6 +3344,120 @@ class WizardApp:
 			traceback.print_exc()
 			WizardApp._HashStorage.free_all_hashes()
 			return False
+
+	def _separate_vfx_entries(self, repathed_dir: Path, champ: str) -> int:
+		"""
+		Separate VFX entries from main BIN (after combine_linked merged everything).
+		- VFX entries go to data/{champ}_vfx.bin
+		- Non-VFX entries stay in main BIN
+		Returns the number of VFX entries separated.
+		"""
+		try:
+			print(f"[DEBUG] Separating VFX entries from {repathed_dir}")
+
+			# Check hashtables status
+			print(f"[DEBUG] Hashtables has {len(WizardApp._HashStorage.hashtables)} keys")
+			if 'hashes.bintypes.txt' in WizardApp._HashStorage.hashtables:
+				print(f"[DEBUG] hashes.bintypes.txt has {len(WizardApp._HashStorage.hashtables['hashes.bintypes.txt'])} entries")
+			else:
+				print("[DEBUG] hashes.bintypes.txt NOT in hashtables!")
+
+			# Build type hash lookup from hashes.bintypes.txt
+			bin_type_hashes = {}
+			if 'hashes.bintypes.txt' in WizardApp._HashStorage.hashtables:
+				for hex_hash, raw_name in WizardApp._HashStorage.hashtables['hashes.bintypes.txt'].items():
+					bin_type_hashes[raw_name.strip()] = hex_hash
+
+			vfx_type_hash = bin_type_hashes.get('VfxSystemDefinitionData')
+			if not vfx_type_hash:
+				print(f"[DEBUG] VfxSystemDefinitionData not found. bin_type_hashes has {len(bin_type_hashes)} entries")
+				if len(bin_type_hashes) > 0:
+					print(f"[DEBUG] Sample entries: {list(bin_type_hashes.items())[:3]}")
+				return 0
+
+			print(f"[DEBUG] VfxSystemDefinitionData hash: {vfx_type_hash}")
+
+			data_dir = repathed_dir / 'data'
+			characters_dir = data_dir / 'characters'
+
+			# Find ALL skin BINs (in data/characters/*/skins/) - including subfolders like aniviaegg
+			all_bin_paths = []
+			if characters_dir.exists():
+				for bin_file in characters_dir.rglob("*.bin"):
+					if self._is_valid_binary_bin(bin_file):
+						all_bin_paths.append(bin_file)
+
+			if not all_bin_paths:
+				print("[DEBUG] No skin BINs found in characters folder")
+				return 0
+
+			print(f"[DEBUG] Found {len(all_bin_paths)} BIN file(s) to process")
+			for bp in all_bin_paths:
+				print(f"[DEBUG]   - {bp.relative_to(repathed_dir)}")
+
+			# Collect ALL VFX entries from ALL BINs, track existing hashes to avoid duplicates
+			all_vfx_entries = []
+			existing_vfx_hashes = set()
+			total_vfx_count = 0
+
+			for bin_path in all_bin_paths:
+				main_bin = pyRitoFile.bin.BIN().read(str(bin_path))
+				print(f"[DEBUG] Processing {bin_path.name}: {len(main_bin.entries)} entries")
+
+				# Separate VFX from non-VFX
+				vfx_entries = []
+				non_vfx_entries = []
+
+				for entry in main_bin.entries:
+					if entry.type == vfx_type_hash:
+						vfx_entries.append(entry)
+						# Only add to combined list if not already seen
+						if entry.hash not in existing_vfx_hashes:
+							all_vfx_entries.append(entry)
+							existing_vfx_hashes.add(entry.hash)
+					else:
+						non_vfx_entries.append(entry)
+
+				print(f"[DEBUG]   Separated: {len(vfx_entries)} VFX, {len(non_vfx_entries)} non-VFX")
+				total_vfx_count += len(vfx_entries)
+
+				if vfx_entries:
+					# Update this BIN with only non-VFX entries + link to VFX bin
+					main_bin.entries = non_vfx_entries
+					vfx_bin_name = f"{champ}_vfx.bin"
+					vfx_link_path = f"data/{vfx_bin_name}"
+					if vfx_link_path not in main_bin.links:
+						main_bin.links.append(vfx_link_path)
+					main_bin.write(str(bin_path))
+					print(f"[DEBUG]   Updated {bin_path.name} with {len(non_vfx_entries)} non-VFX entries")
+
+			if not all_vfx_entries:
+				print("[DEBUG] No VFX entries found in any BIN")
+				return 0
+
+			# Create ONE combined VFX BIN in data/ folder
+			vfx_bin_name = f"{champ}_vfx.bin"
+			vfx_bin_path = data_dir / vfx_bin_name
+			data_dir.mkdir(parents=True, exist_ok=True)
+
+			vfx_bin = pyRitoFile.bin.BIN(
+				signature='PROP',
+				version=3,
+				is_patch=False,
+				links=[],
+				entries=all_vfx_entries,
+				patches=[]
+			)
+			vfx_bin.write(str(vfx_bin_path))
+			print(f"[DEBUG] Created: data/{vfx_bin_name} with {len(all_vfx_entries)} unique VFX entries (from {total_vfx_count} total)")
+
+			return len(all_vfx_entries)
+
+		except Exception as e:
+			print(f"[DEBUG] Error in _separate_vfx_entries: {e}")
+			import traceback
+			traceback.print_exc()
+			return 0
 
 	def _package_repathed(self) -> bool:
 		try:
@@ -5460,8 +5601,7 @@ class WizardApp:
 					entry.data.append(hb)
 		# write back
 		b.write(str(bin_path))
-		
-		WizardApp._HashStorage.free_all_hashes()
+		# NOTE: Don't free hashtables here - caller manages the lifecycle
 	
 	def _pack_wad(self, raw_dir: Path, wad_file: Path) -> None:
 		# Local pack using pyRitoFile.wad (mirrors LtMAO.wad_tool.pack)
