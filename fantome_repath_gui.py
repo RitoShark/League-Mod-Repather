@@ -5651,21 +5651,64 @@ class WizardApp:
 		return hash_dir
 	
 	def _check_hashes(self):
-		"""Check if all required hash files exist"""
+		"""Check if all required hash files exist and are reasonably fresh"""
 		required = [
 			'hashes.binentries.txt',
 			'hashes.binfields.txt',
 			'hashes.binhashes.txt',
 			'hashes.bintypes.txt',
 			'hashes.game.txt',
-			'hashes.lcu.txt'
+			'hashes.lcu.txt',
+			'hashes.rst.txt'
 		]
 		hash_dir = self._hash_dir()
 		missing = [f for f in required if not (hash_dir / f).exists()]
 		if missing:
 			self.hash_status.set(f"Missing {len(missing)} hash file(s). Click Download Hashes.")
+			return
+
+		# Freshness check: hashes older than STALE_DAYS prompt the user to update.
+		# CommunityDragon updates with each patch (~2 weeks), so 7 days is a safe default.
+		import time
+		STALE_DAYS = 7
+		now = time.time()
+		oldest_age_days = 0.0
+		oldest_file = None
+		for fname in required:
+			fp = hash_dir / fname
+			try:
+				age_days = (now - fp.stat().st_mtime) / 86400.0
+				if age_days > oldest_age_days:
+					oldest_age_days = age_days
+					oldest_file = fname
+			except Exception:
+				continue
+
+		if oldest_age_days > STALE_DAYS and not getattr(self, '_stale_hash_prompt_shown', False):
+			self._stale_hash_prompt_shown = True  # only once per session
+			self.hash_status.set(
+				f"⚠ Hashes are {int(oldest_age_days)} days old (oldest: {oldest_file}). "
+				f"Consider clicking Update Hashes."
+			)
+			# Non-blocking prompt offering to update right now
+			def _ask_update():
+				try:
+					if messagebox.askyesno(
+						APP_TITLE,
+						f"Your hash files are {int(oldest_age_days)} days old "
+						f"(oldest: {oldest_file}).\n\n"
+						f"League patches usually update hashes every ~2 weeks. "
+						f"Old hashes can cause unresolved paths and broken repaths.\n\n"
+						f"Download the latest hashes from CommunityDragon now?"
+					):
+						self._update_hashes()
+				except Exception:
+					pass
+			self.root.after(200, _ask_update)
 		else:
-			self.hash_status.set(f"✓ All hash files present ({hash_dir})")
+			self.hash_status.set(
+				f"✓ All hash files present, newest within {int(oldest_age_days)} day(s) ({hash_dir})"
+			)
 	
 	def _download_hashes(self):
 		"""Download all hash files from CommunityDragon"""
@@ -5674,17 +5717,19 @@ class WizardApp:
 				import requests
 				self.hash_status.set("Downloading hash files from CommunityDragon...")
 				
+				base_url = 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/'
 				hash_urls = {
-					'hashes.binentries.txt': 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.binentries.txt',
-					'hashes.binfields.txt': 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.binfields.txt',
-					'hashes.binhashes.txt': 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.binhashes.txt',
-					'hashes.bintypes.txt': 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.bintypes.txt',
-					'hashes.lcu.txt': 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.lcu.txt',
+					'hashes.binentries.txt': base_url + 'hashes.binentries.txt',
+					'hashes.binfields.txt': base_url + 'hashes.binfields.txt',
+					'hashes.binhashes.txt': base_url + 'hashes.binhashes.txt',
+					'hashes.bintypes.txt': base_url + 'hashes.bintypes.txt',
+					'hashes.lcu.txt': base_url + 'hashes.lcu.txt',
+					'hashes.rst.txt': base_url + 'hashes.rst.txt',
 				}
-				
+
 				hash_dir = self._hash_dir()
 				downloaded = 0
-				
+
 				# Download simple files
 				for filename, url in hash_urls.items():
 					self.hash_status.set(f"Downloading {filename}...")
@@ -5693,25 +5738,32 @@ class WizardApp:
 					with open(hash_dir / filename, 'wb') as f:
 						f.write(response.content)
 					downloaded += 1
-				
-				# Download hashes.game.txt (split into .0 and .1)
-				self.hash_status.set("Downloading hashes.game.txt (part 1/2)...")
-				part0_url = 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.game.txt.0'
-				part0 = requests.get(part0_url, timeout=30)
-				part0.raise_for_status()
-				
-				self.hash_status.set("Downloading hashes.game.txt (part 2/2)...")
-				part1_url = 'https://raw.githubusercontent.com/CommunityDragon/Data/master/hashes/lol/hashes.game.txt.1'
-				part1 = requests.get(part1_url, timeout=30)
-				part1.raise_for_status()
-				
+
+				# Download hashes.game.txt (split across multiple parts; probe until 404)
+				game_parts = []
+				part_index = 0
+				while True:
+					part_url = f'{base_url}hashes.game.txt.{part_index}'
+					self.hash_status.set(f"Downloading hashes.game.txt (part {part_index + 1})...")
+					part_resp = requests.get(part_url, timeout=30)
+					if part_resp.status_code == 404:
+						break
+					part_resp.raise_for_status()
+					game_parts.append(part_resp.content)
+					part_index += 1
+					if part_index > 32:  # safety cap
+						break
+
+				if not game_parts:
+					raise RuntimeError("No hashes.game.txt parts found on CommunityDragon")
+
 				# Combine and save
 				with open(hash_dir / 'hashes.game.txt', 'wb') as f:
-					f.write(part0.content)
-					f.write(part1.content)
+					for chunk in game_parts:
+						f.write(chunk)
 				downloaded += 1
-				
-				self.hash_status.set(f"✓ Successfully downloaded {downloaded} hash files!")
+
+				self.hash_status.set(f"✓ Successfully downloaded {downloaded} hash files ({len(game_parts)} game parts merged)!")
 			except requests.RequestException as e:
 				self.hash_status.set(f"❌ Download failed: {e}")
 			except Exception as e:
